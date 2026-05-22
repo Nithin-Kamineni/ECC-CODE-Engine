@@ -55,8 +55,8 @@ RESULTS_DIR="${ARTIFACTS_DIR}/accuracy_results"
 
 # ---- Protection parameters (tunable) ----
 NUMEL_THRESHOLD="${NUMEL_THRESHOLD:-5000}"
-SCORE_PERCENTILE="${SCORE_PERCENTILE:-0.90}"
-MAX_PROTECT="${MAX_PROTECT:-0.02}"
+SCORE_PERCENTILE="${SCORE_PERCENTILE:-0.0025}"
+MAX_PROTECT="${MAX_PROTECT:-0.05}"
 
 echo "[7-SensitiveAccuracyTesting/run.sh] SIF=${SIF}"
 echo "[7-SensitiveAccuracyTesting/run.sh] T_VALUE=${T_VALUE}  (SLURM array task)"

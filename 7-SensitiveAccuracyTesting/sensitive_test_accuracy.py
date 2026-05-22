@@ -39,9 +39,9 @@ def _select_protected_layers(sens_json: dict, layer_df: pd.DataFrame,
     """
     Return the list of layer names to protect (replace ECC weights with originals).
 
-    Selection criteria (all must hold):
-      1. numel < numel_threshold           (small layer — cheap to protect)
-      2. grad_norm_score >= score_threshold (top (1-score_percentile) most sensitive)
+    Selection criteria (either 1 OR 2 must hold, plus 3):
+      1. grad_norm_score >= score_threshold (top (1-score_percentile) most sensitive)
+      2. numel < numel_threshold           (small layer — cheap to protect)
       3. cumulative protected weights < max_protect * total_weights
 
     Returns (protected_layers, protect_count, total_weights).
@@ -58,12 +58,13 @@ def _select_protected_layers(sens_json: dict, layer_df: pd.DataFrame,
     for _, row in df_sorted.iterrows():
         layer = row["layer"]
         score = row["grad_norm_score"]
-        if score < score_threshold:
-            break  # all remaining rows are below threshold
         if layer not in sens_json:
             continue
         numel = sens_json[layer].get("numel", 0)
-        if numel == 0 or numel >= numel_threshold:
+        if numel == 0:
+            continue
+        # OR logic: protect if high-sensitivity (score percentile) OR small (numel threshold)
+        if score < score_threshold and numel >= numel_threshold:
             continue
         if (protect_count + numel) / total_weights > max_protect:
             continue  # would exceed cap; skip this layer but keep checking others

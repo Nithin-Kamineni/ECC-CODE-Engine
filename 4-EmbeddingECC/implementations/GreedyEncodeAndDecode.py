@@ -31,6 +31,7 @@ def GreedyEncodeAndDecode(
     message_size=30,
     search_metric='L2',
     move_unit_range=8,
+    bucket_sens=None,
 ):
     """
     Greedy BCH embedding search with per-bucket STEP-aware moves.
@@ -162,6 +163,8 @@ def GreedyEncodeAndDecode(
     bucket_slices = [(rec["start"], rec["end"]) for rec in original_nums_spans]
     base_m        = bits_arr[msg_idx_arr].astype(np.int8).copy()
 
+    bucket_sens_arr = np.array(bucket_sens, dtype=np.float64) if bucket_sens is not None else None
+
     # ------------------------------------------------------------------
     # 3) Helper: evaluate a delta vector
     # ------------------------------------------------------------------
@@ -191,8 +194,12 @@ def GreedyEncodeAndDecode(
             dtype=np.int64,
         )
 
-        diffs     = bucket_vals - orig_vals_arr
-        score     = int(np.abs(diffs).sum()) if search_metric == "L1" else int((diffs ** 2).sum())
+        diffs = bucket_vals - orig_vals_arr
+        if bucket_sens_arr is not None:
+            score = int((np.abs(diffs) * bucket_sens_arr).sum()) if search_metric == "L1" \
+                    else int(((diffs ** 2) * bucket_sens_arr).sum())
+        else:
+            score = int(np.abs(diffs).sum()) if search_metric == "L1" else int((diffs ** 2).sum())
         tie_break = int(np.abs(deltas).sum())
 
         return score, tie_break, full, bucket_vals

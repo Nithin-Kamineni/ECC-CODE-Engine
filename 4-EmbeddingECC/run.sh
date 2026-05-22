@@ -91,9 +91,10 @@ for DS in $EMBED_DATASETS; do
                         --t-value       "${T_VALUE}" \
                         --approach      "${EMBED_APPROACH}" \
                         --codeword      "${EMBED_CODEWORD}" \
-                        --workers       "${EMBED_WORKERS}" \
-                        --patterns-dir  "${PATTERNS_DIR}" \
-                        --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}"
+                        --workers           "${EMBED_WORKERS}" \
+                        --patterns-dir      "${PATTERNS_DIR}" \
+                        --chunks-dir        "${EMBEDDED_ECC_CHUNKS_DIR}" \
+                        --sensitivity-dir   "${SENSITIVITY_DIR}"
 
             echo "[4-EmbeddingECC] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done

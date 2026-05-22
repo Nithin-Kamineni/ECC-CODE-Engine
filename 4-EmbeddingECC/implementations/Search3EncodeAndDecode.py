@@ -30,6 +30,7 @@ def Search3EncodeAndDecode(
     message_parity_size=63,
     message_size=30,
     search_metric='L2',
+    bucket_sens=None,
 ):
     """
     BCH embedding with bucket perturbation search.
@@ -249,7 +250,13 @@ def Search3EncodeAndDecode(
     orig_vals = np.array(original_bucket_values, dtype=np.int64)   # (B,)
     diffs     = all_bucket_vals - orig_vals[np.newaxis, :]         # (V, B)
 
-    if search_metric == "L1":
+    if bucket_sens is not None:
+        bucket_sens_arr = np.array(bucket_sens, dtype=np.float64)  # (B,)
+        if search_metric == "L1":
+            scores = (np.abs(diffs) * bucket_sens_arr[np.newaxis, :]).sum(axis=1)
+        else:
+            scores = ((diffs ** 2) * bucket_sens_arr[np.newaxis, :]).sum(axis=1)
+    elif search_metric == "L1":
         scores = np.abs(diffs).sum(axis=1)
     else:
         scores = (diffs * diffs).sum(axis=1)
