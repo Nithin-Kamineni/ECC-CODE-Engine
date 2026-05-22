@@ -1,23 +1,33 @@
 #!/bin/bash
-# ============================================================================
-# SLURM submit script for the ECC Resilience pipeline on HiPerGator.
+# =============================================================================
+# SLURM submit script — 1-Quantization (training + PTQ)
 #
 # Usage:
-#   sbatch run.sh
+#   sbatch 1-Quantization/run.sh
 #
-# What it does:
-#   1. Requests one GPU node, loads Singularity.
-#   2. Launches a single `singularity exec --nv` that runs `bash run_all.sh`
-#      INSIDE the container. Every python3 call in run_all.sh therefore uses
-#      the container's PyTorch / CUDA without per-line wrapping.
+# What it does (two passes):
+#   Pass 1 — Train each architecture on CIFAR10 and CIFAR100.
+#             ImageNet is skipped; pretrained torchvision weights are used instead.
+#             If SKIP_TRAIN=true and model_float32.pth already exists, training
+#             is skipped for that (dataset, arch) pair.
 #
-# Adjust before submitting:
-#   - SBATCH --time / --mem / --gres   (full pipeline is long; tune as needed)
-#   - SIF        : path to your Singularity image
-#   - WORKDIR    : directory holding run_all.sh, *.py, and artifacts/
-# ============================================================================
+#   Pass 2 — Quantize every (dataset, arch) pair to each bit-width in
+#             QUANTIZE_BITS (default: "8 4").
+#             For CIFAR: loads the trained model_float32.pth and quantizes it.
+#             For ImageNet: pulls pretrained torchvision weights (--use-pretrained 1),
+#             saves model_float32.pth, then quantizes.
+#
+#   All model checkpoints are written to 0-Data/artifacts/models/.
+#
+# Overrides (pass via env before sbatch):
+#   DATASETS="CIFAR10"              # restrict to one dataset
+#   ARCHS="resnet18"                # restrict to one architecture
+#   EPOCHS=50                       # shorten training
+#   SKIP_TRAIN=true                 # skip training if float32 checkpoint exists
+#   QUANTIZE_BITS="8"               # quantize to 8-bit only
+# =============================================================================
 
-#SBATCH --job-name=ecc-res
+#SBATCH --job-name=ecc-quantize
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -32,36 +42,102 @@
 date; hostname; pwd
 mkdir -p logs
 
+# ---- Load global environment ----
+# SLURM copies this script to /var/spool/slurmd/... so BASH_SOURCE[0] is wrong.
+# SLURM_SUBMIT_DIR is always the directory where sbatch was called — use that.
+# Must submit from the script's own folder: cd 1-Quantization && sbatch run.sh
+SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+source "${SCRIPT_DIR}/../env.sh"
+
 # ---- Load Singularity ----
 module load singularity
 
-# ---- Container image (PyTorch / CUDA / numpy / torchvision baked in) ----
-export SIF="/blue/rewetz/vkamineni/RECC_MIP_v15.sif"
+EPOCHS="${EPOCHS:-100}"
+LR="${LR:-0.1}"
 
-# ---- Working directory: where run_all.sh and the *.py files live ----
-# Put your code on /blue (NOT /home -- /home has tight quotas on HiPerGator).
-WORKDIR="/blue/rewetz/vkamineni/Projects/ECC-CODE-Engine/Quantization"   # <-- EDIT THIS
-cd "${WORKDIR}"
+echo "[1-Quantization/run.sh] SIF=${SIF}"
+echo "[1-Quantization/run.sh] DATASETS=${DATASETS}"
+echo "[1-Quantization/run.sh] ARCHS=${ARCHS}"
+echo "[1-Quantization/run.sh] ARTIFACTS_DIR=${ARTIFACTS_DIR}"
+echo "[1-Quantization/run.sh] QUANTIZE_BITS=${QUANTIZE_BITS}"
+echo "[1-Quantization/run.sh] SKIP_TRAIN=${SKIP_TRAIN}"
 
-# ---- ImageNet validation set ----
-# Steps 5, 8, 11 expect ./imagenet-val under the working dir.
-# Symlink to a shared ImageNet copy on /blue rather than downloading.
-# Example (do this ONCE, manually):
-#   ln -s /blue/<group>/<shared>/imagenet/val ./imagenet-val
-# If the link is missing, the ImageNet steps will fail with a clear error.
+# =============================================================================
+# Pass 1 — Train each arch on each trainable dataset (CIFAR10, CIFAR100)
+# =============================================================================
+echo ""
+echo "=== Pass 1: Training ==="
+for DS in $DATASETS; do
+    if [ "$DS" = "IMAGENET" ]; then
+        echo "[1-Quantization] Skipping training for IMAGENET (pretrained torchvision weights used)"
+        continue
+    fi
+    for ARC in $ARCHS; do
+        FLOAT32_PATH="${MODELS_DIR}/${DS,,}/${ARC,,}/model_float32.pth"
+        if [ "${SKIP_TRAIN}" = "true" ] && [ -f "${FLOAT32_PATH}" ]; then
+            echo "[1-Quantization] SKIP_TRAIN=true: ${ARC} on ${DS} already trained (${FLOAT32_PATH}), skipping."
+        else
+            echo "[1-Quantization] Training ${ARC} on ${DS} ..."
+            singularity exec \
+                --nv \
+                --bind /blue \
+                "${SIF}" \
+                python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                    --data-root       "${DATASET_DIR}" \
+                    --artifacts-root  "${ARTIFACTS_DIR}" \
+                    train \
+                    --dataset         "${DS}" \
+                    --arch            "${ARC}" \
+                    --epochs          "${EPOCHS}" \
+                    --lr              "${LR}" \
+                    --optim sgd --momentum 0.9 \
+                    --weight-decay 5e-4 --scheduler cosine --warmup-epochs 5 \
+                    --label-smoothing 0.1
+        fi
+    done
+done
 
-# ---- Run the entire pipeline inside the container ----
-# --nv          : pass through NVIDIA driver / GPUs
-# --bind /blue  : make /blue visible inside the container (auto-bound on
-#                 HiPerGator by default, but explicit is safer)
-# --pwd         : set the in-container working directory
-srun --cpu-bind=cores --mem-bind=local \
-    singularity exec \
-        --nv \
-        --bind /blue \
-        --pwd "${WORKDIR}" \
-        --env SIF="${SIF}" \
-        "${SIF}" \
-        bash run_all.sh
+# =============================================================================
+# Pass 2 — Quantize every (dataset, arch) pair to each bit-width
+#           CIFAR: loads model_float32.pth trained above
+#           ImageNet: pulls pretrained torchvision weights, saves float32 + quantized
+# =============================================================================
+echo ""
+echo "=== Pass 2: Quantization ==="
+for DS in $DATASETS; do
+    for ARC in $ARCHS; do
+        for BITS in $QUANTIZE_BITS; do
+            echo "[1-Quantization] Quantizing ${ARC} on ${DS} @ ${BITS}-bit ..."
+            if [ "$DS" = "IMAGENET" ]; then
+                singularity exec \
+                    --nv \
+                    --bind /blue \
+                    "${SIF}" \
+                    python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                        --data-root       "${DATASET_DIR}" \
+                        --artifacts-root  "${ARTIFACTS_DIR}" \
+                        --imagenet-root   "${IMAGENET_ROOT}" \
+                        --use-pretrained  1 \
+                        quantize \
+                        --dataset         "${DS}" \
+                        --arch            "${ARC}" \
+                        --bits            "${BITS}"
+            else
+                singularity exec \
+                    --nv \
+                    --bind /blue \
+                    "${SIF}" \
+                    python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                        --data-root       "${DATASET_DIR}" \
+                        --artifacts-root  "${ARTIFACTS_DIR}" \
+                        quantize \
+                        --dataset         "${DS}" \
+                        --arch            "${ARC}" \
+                        --bits            "${BITS}"
+            fi
+        done
+    done
+done
 
-echo "[run.sh] Job finished with exit code $?"
+echo ""
+echo "[1-Quantization/run.sh] Job finished with exit code $?"

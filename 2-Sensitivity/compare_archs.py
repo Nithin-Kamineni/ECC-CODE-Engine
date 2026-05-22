@@ -11,7 +11,7 @@
 #       --methods magnitude grad_abs taylor fisher \
 #       --max-batches 4
 #
-# Or for CIFAR-10 (you must have trained checkpoints already):
+# Or for CIFAR-10 (you must have trained checkpoints already):  
 #   python compare_archs.py --dataset CIFAR10 \
 #       --archs resnet18 vgg16 mobilenet_v2 \
 #       --methods magnitude grad_abs taylor fisher --max-batches 8

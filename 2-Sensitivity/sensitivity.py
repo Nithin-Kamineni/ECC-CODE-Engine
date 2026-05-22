@@ -467,6 +467,8 @@ def dump_per_weight(model, scores_per_method, out_dir, tag, *,
             agg = _layer_aggregate(per_m[rank_by], layer_rank_by)
             layer_scores.append((agg, li, lname))
         layer_scores.sort(reverse=True, key=lambda t: t[0])
+        if top_layers > len(layer_scores):
+            print(f"[dump-weights] top_layers={top_layers} exceeds layer count={len(layer_scores)}; selecting all {len(layer_scores)} layers")
         chosen = layer_scores[:top_layers]
         print(f"[dump-weights] top-{top_layers} layers by {layer_rank_by}({rank_by}):")
         for rk, (agg, li, lname) in enumerate(chosen):
@@ -475,6 +477,8 @@ def dump_per_weight(model, scores_per_method, out_dir, tag, *,
         for layer_rank, (_agg, li, lname) in enumerate(chosen):
             w_flat = layers[li][1]; per_m = layers[li][2]; shape = layers[li][3]
             scores = per_m[rank_by]
+            if top_per_layer > scores.numel():
+                print(f"[dump-weights] top_per_layer={top_per_layer} exceeds weight count={scores.numel()} in {lname}; selecting all weights")
             M = min(top_per_layer, scores.numel())
             top_vals, top_idx = torch.topk(scores, M, largest=True, sorted=True)
             for in_layer_rank, loc in enumerate(top_idx.tolist()):

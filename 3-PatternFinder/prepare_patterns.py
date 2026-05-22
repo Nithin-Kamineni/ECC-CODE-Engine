@@ -48,6 +48,55 @@ import json
 import argparse
 import importlib.util
 import numpy as np
+
+
+def _load_sd_from_ckpt(model_path: str) -> dict:
+    """Return a plain {name: tensor} state dict from a float32 or PTQ checkpoint.
+
+    PTQ checkpoints use qstate_dict + meta.scales; weights are dequantized back
+    to float32 so the existing weight-permutation code can use them unchanged.
+    """
+    import torch
+    ckpt = torch.load(model_path, map_location="cpu")
+    if "qstate_dict" in ckpt and "meta" in ckpt:
+        qsd    = ckpt["qstate_dict"]
+        scales = ckpt["meta"]["scales"]
+        sd: dict = {}
+        for k, v in qsd.items():
+            sinfo = scales.get(k)
+            if sinfo is None:
+                sd[k] = v
+            elif sinfo["type"] == "per_tensor":
+                sd[k] = v.to(torch.float32) * float(sinfo["scale"])
+            elif sinfo["type"] == "per_channel":
+                s = sinfo["scales"].to(torch.float32)
+                q = v.to(torch.float32)
+                while s.ndim < q.ndim:
+                    s = s.unsqueeze(-1)
+                sd[k] = q * s
+            else:
+                sd[k] = v
+        return sd
+    return ckpt.get("state_dict", ckpt)
+
+
+def _load_raw_sd_from_ckpt(model_path: str) -> dict:
+    """Return {name: numpy_array} with raw quantized integers for PTQ checkpoints.
+    Does NOT dequantize — preserves int8/int16 values as stored, so ECC embedding
+    operates on the actual bit patterns rather than float approximations."""
+    import torch
+    ckpt = torch.load(model_path, map_location="cpu")
+    raw = ckpt["qstate_dict"] if "qstate_dict" in ckpt else ckpt.get("state_dict", ckpt)
+    sd: dict = {}
+    for k, v in raw.items():
+        nk = k
+        for pfx in ("module.", "_orig_mod."):
+            if nk.startswith(pfx):
+                nk = nk[len(pfx):]
+        sd[nk] = v.detach().cpu().numpy() if hasattr(v, "detach") else v
+    return sd
+
+
 import pandas as pd
 
 
@@ -166,16 +215,25 @@ def main():
     # find_pattern parameters
     ap.add_argument("--run-search", action="store_true",
                     help="Also run find_pattern.search() on each layer.")
+    ap.add_argument("--identity-perm", action="store_true",
+                    help="Skip search; save identity permutation and original "
+                         "weights for every layer (DISABLE_PATTERN_FIND mode).")
     ap.add_argument("--find-pattern-path", default=None)
     ap.add_argument("--group-size", type=int, default=8)
     ap.add_argument("--max-sens", type=int, default=2)
     ap.add_argument("--threshold", type=float, default=None,
                     help="Sensitivity cutoff. Default 0.5 for indicator mode; "
                          "required for value mode.")
+    ap.add_argument("--top-sensitive", type=int, default=100,
+                    help="Minimum sensitive nodes to mark per layer. "
+                         "Final count = max(threshold_count, top_sensitive).")
     ap.add_argument("--n-random-strides", type=int, default=400)
     ap.add_argument("--seed", type=int, default=0)
 
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--model-path", default=None,
+                    help="Path to model .pth checkpoint. If given, saves permuted "
+                         "weight tensors alongside the permutation index files.")
     args = ap.parse_args()
 
     # infer num_classes from filename if not given
@@ -221,9 +279,17 @@ def main():
             else:
                 raise SystemExit("value mode + --run-search requires --threshold")
 
+    # load model state dict for weight extraction (if checkpoint provided)
+    # Use raw int8 values so ECC embedding operates on the actual quantized bit patterns.
+    sd = {}
+    if args.model_path and (args.run_search or args.identity_perm):
+        sd = _load_raw_sd_from_ckpt(args.model_path)
+        print(f"[model] loaded {len(sd)} tensors from {args.model_path}")
+
     # combined flat-index export
-    flat_export = []
+    flat_export  = []
     search_summary = []
+    manifest     = {}
 
     for L in layers:
         if L not in numel_map:
@@ -241,16 +307,30 @@ def main():
             keep = (fidx >= 0) & (fidx < N)
             fidx, score = fidx[keep], score[keep]
 
+        # Sort by Taylor score descending so top-N selection is straightforward
+        order = np.argsort(score)[::-1]
+        fidx_sorted  = fidx[order]
+        score_sorted = score[order]
+
+        # Determine how many weights to mark as sensitive:
+        #   threshold_count = weights whose score exceeds the threshold
+        #   n_mark = max(threshold_count, top_sensitive)  — whichever is larger
+        thr_val = args.threshold if args.threshold is not None else 0.5
+        threshold_count = int((score_sorted > thr_val).sum())
+        n_mark = min(max(threshold_count, args.top_sensitive), len(fidx_sorted))
+
+        fidx_to_mark  = fidx_sorted[:n_mark]
+        score_to_mark = score_sorted[:n_mark]
+
         # dense array
         sens = np.zeros(N, dtype=np.float32)
-        sens[fidx] = 1.0 if args.sensitive_mode == "indicator" else score
+        sens[fidx_to_mark] = 1.0 if args.sensitive_mode == "indicator" else score_to_mark
 
         npy = os.path.join(args.out_dir, f"{_sanitize(L)}_sens.npy")
         np.save(npy, sens)
-        n_sens = int((sens > (args.threshold if args.threshold is not None else 0.5)).sum()) \
-            if args.sensitive_mode == "indicator" else int((sens > 0).sum())
-        print(f"\n[{L}]  N={N:,}  selected={fidx.size}  "
-              f"density={fidx.size / N * 100:.4f}%  -> {npy}")
+        print(f"\n[{L}]  N={N:,}  in_csv={fidx.size}  "
+              f"threshold_count={threshold_count}  top_sensitive={args.top_sensitive}  marking={n_mark}"
+              f"  density={n_mark / N * 100:.4f}%  -> {npy}")
 
         for fi, sc in zip(fidx.tolist(), score.tolist()):
             flat_export.append({"layer": L, "flat_idx": fi,
@@ -275,6 +355,28 @@ def main():
                   f"-> best({best['family']},{best['param']}) excess = "
                   f"{bm['total_excess']:,}  (max/group {baseline['max_in_group']}"
                   f"->{bm['max_in_group']})")
+
+            # --- permutation index files ---
+            perm     = fp.make_perm(best["family"], best["param"], N)
+            inv_perm = np.empty_like(perm)
+            inv_perm[perm] = np.arange(N, dtype=perm.dtype)
+
+            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_perm.npy")
+            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_inv_perm.npy")
+            np.save(perm_file, perm)
+            np.save(inv_perm_file, inv_perm)
+
+            # --- permuted weights (only if checkpoint was loaded) ---
+            w_perm_file = None
+            layer_shape = None
+            if L in sd:
+                layer_shape = list(sd[L].shape)
+                w_flat      = sd[L].flatten()
+                w_perm      = w_flat[perm]
+                w_perm_file = os.path.join(args.out_dir,
+                                           f"{_sanitize(L)}_weights_perm.npy")
+                np.save(w_perm_file, w_perm)
+
             txt = os.path.join(args.out_dir, f"{_sanitize(L)}_best_pattern.txt")
             with open(txt, "w") as f:
                 f.write(f"layer: {L}\nN: {N}\ngroup_size: {args.group_size}\n"
@@ -283,6 +385,29 @@ def main():
                 f.write(f"metrics: {bm}\n")
                 f.write(f"identity baseline: {baseline}\n\n")
                 f.write(desc + "\n")
+
+            # --- manifest entry for this layer ---
+            manifest[L] = {
+                "layer":         L,
+                "N":             N,
+                "shape":         layer_shape,
+                "group_size":    args.group_size,
+                "max_sens":      args.max_sens,
+                "threshold":     float(thr),
+                "top_sensitive": args.top_sensitive,
+                "n_marked":      int(n_mark),
+                "best_family":   best["family"],
+                "best_param":    best["param"],
+                "identity_excess":        baseline["total_excess"],
+                "best_excess":            bm["total_excess"],
+                "best_violating_groups":  bm["violating_groups"],
+                "best_max_in_group":      bm["max_in_group"],
+                "model_path":    args.model_path,
+                "perm_file":     perm_file,
+                "inv_perm_file": inv_perm_file,
+                "weights_perm_file": w_perm_file,
+            }
+
             search_summary.append({
                 "layer": L, "N": N, "selected": int(fidx.size),
                 "best_family": best["family"], "best_param": best["param"],
@@ -291,6 +416,55 @@ def main():
                 "identity_max_in_group": baseline["max_in_group"],
                 "best_max_in_group": bm["max_in_group"],
                 "best_violating_groups": bm["violating_groups"],
+            })
+
+        elif args.identity_perm:
+            perm     = np.arange(N, dtype=np.int64)
+            inv_perm = np.arange(N, dtype=np.int64)   # identity is its own inverse
+
+            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_perm.npy")
+            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_inv_perm.npy")
+            np.save(perm_file, perm)
+            np.save(inv_perm_file, inv_perm)
+
+            w_perm_file = None
+            layer_shape = None
+            if L in sd:
+                layer_shape = list(sd[L].shape)
+                w_perm_file = os.path.join(args.out_dir,
+                                           f"{_sanitize(L)}_weights_perm.npy")
+                np.save(w_perm_file, sd[L].flatten())   # original order, no reordering
+
+            txt = os.path.join(args.out_dir, f"{_sanitize(L)}_best_pattern.txt")
+            with open(txt, "w") as f:
+                f.write(f"layer: {L}\nN: {N}\npattern: identity (search disabled)\n")
+
+            manifest[L] = {
+                "layer":                 L,
+                "N":                     N,
+                "shape":                 layer_shape,
+                "group_size":            args.group_size,
+                "max_sens":              args.max_sens,
+                "threshold":             None,
+                "top_sensitive":         args.top_sensitive,
+                "n_marked":              int(n_mark),
+                "best_family":           "identity",
+                "best_param":            None,
+                "identity_excess":       None,
+                "best_excess":           None,
+                "best_violating_groups": None,
+                "best_max_in_group":     None,
+                "model_path":            args.model_path,
+                "perm_file":             perm_file,
+                "inv_perm_file":         inv_perm_file,
+                "weights_perm_file":     w_perm_file,
+            }
+            search_summary.append({
+                "layer": L, "N": N, "selected": int(fidx.size),
+                "best_family": "identity", "best_param": None,
+                "identity_excess": None, "best_excess": None,
+                "identity_max_in_group": None, "best_max_in_group": None,
+                "best_violating_groups": None,
             })
 
     # write combined exports
@@ -306,6 +480,13 @@ def main():
         print(f"[saved] {ss_path}")
         print("\n=== pattern search summary ===")
         print(ss.to_string(index=False))
+
+    if manifest:
+        import json
+        manifest_path = os.path.join(args.out_dir, "pattern_manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+        print(f"[saved] {manifest_path}  ({len(manifest)} layers)")
 
     print(f"\n[done] {args.out_dir}")
 

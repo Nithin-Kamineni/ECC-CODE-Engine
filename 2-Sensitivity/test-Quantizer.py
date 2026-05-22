@@ -26,8 +26,6 @@ from torchvision import datasets, transforms, models
 IMNET_MEAN = [0.485, 0.456, 0.406]
 IMNET_STD  = [0.229, 0.224, 0.225]
 
-ARTIFACTS_ROOT = "artifacts"
-
 
 def now_str() -> str:
     return time.strftime("%H:%M:%S")
@@ -622,10 +620,7 @@ def load_quantized_into_model(model, dataset, arch, num_bits, qtag, map_location
 # =========================================================
 
 def ckpt_path(dataset, arch, tag):
-    base = f"{ARTIFACTS_ROOT}/models/{dataset.lower()}/{arch.lower()}"
-    if tag.endswith("_ptq"):   # int16_ptq, int8_ptq, int4_ptq → PTQ/ subdirectory
-        return f"{base}/PTQ/model_{tag}.pth"
-    return f"{base}/model_{tag}.pth"
+    return f"artifacts/models/{dataset.lower()}/{arch.lower()}/model_{tag}.pth"
 
 
 def save_float_checkpoint(model, dataset, arch, tag, extra=None):
@@ -896,8 +891,6 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p.add_argument("--data-root", default="./data")
-    p.add_argument("--artifacts-root", default="artifacts",
-                   help="Root directory for model checkpoints (models/) and other artifacts")
     p.add_argument("--imagenet-root", default="")
     p.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--workers", type=int, default=2)
@@ -960,11 +953,9 @@ def ddp_cleanup_if_needed(args):
 
 
 def main():
-    global ARTIFACTS_ROOT
     p = build_parser()
     args = p.parse_args()
     args.dataset = args.dataset.upper()
-    ARTIFACTS_ROOT = args.artifacts_root
 
     ddp_init_if_needed(args)
     try:

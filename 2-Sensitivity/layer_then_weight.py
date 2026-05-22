@@ -301,6 +301,8 @@ def run_hierarchical(model, loader, device, *,
 
     # Step 2: rank layers, keep top-K
     ranked = sorted(layer_scores.items(), key=lambda kv: kv[1], reverse=True)
+    if top_layers > len(ranked):
+        print(f"  [step2] top_layers={top_layers} exceeds layer count={len(ranked)}; selecting all {len(ranked)} layers")
     chosen = ranked[:top_layers]
     print(f"  [step2] top-{top_layers} layers by {layer_metric}:")
     for rk, (lname, sc) in enumerate(chosen):
@@ -315,6 +317,8 @@ def run_hierarchical(model, loader, device, *,
         p = name_to_param[lname]
         shape = tuple(p.shape)
         scores_w = taylor[lname].flatten()
+        if top_per_layer > scores_w.numel():
+            print(f"  [step3] top_per_layer={top_per_layer} exceeds weight count={scores_w.numel()} in {lname}; selecting all weights")
         N = min(top_per_layer, scores_w.numel())
         top_vals, top_idx = torch.topk(scores_w, N, largest=True, sorted=True)
 

@@ -114,10 +114,15 @@ def candidate_strides(n: int, n_random: int, seed: int = 0) -> set:
             if 1 < s < n and gcd(s, n) == 1:
                 strides.add(s)
 
-    while len(strides) < n_random:
+    # Cap attempts so the loop exits when φ(n) < n_random (small/highly-composite n).
+    # Without this, the loop is infinite because len(strides) can never reach n_random.
+    max_attempts = n_random * 20
+    attempts = 0
+    while len(strides) < n_random and attempts < max_attempts:
         s = int(rng.integers(2, n))
         if gcd(s, n) == 1:
             strides.add(s)
+        attempts += 1
 
     return strides
 
