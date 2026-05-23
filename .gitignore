@@ -76,3 +76,4 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+4-EmbeddingECC/c++/ecc_cpp.sif

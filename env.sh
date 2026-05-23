@@ -72,6 +72,9 @@ SKIP_TRAIN="${SKIP_TRAIN:-false}"
 DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 
 # ---- EmbeddingECC — separate control lists (independent of 1-3 pipeline vars) ----
+
+EMBED_RUN_CPP="${EMBED_RUN_CPP:-true}" # set to true to run the C++ embedding code (requires separate compile step)
+
 # Modify these to subset the combinations you actually want to embed.
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
@@ -79,7 +82,7 @@ EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
 EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
 # EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
 EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8}"   # quantized levels only (not float32)
-EMBED_APPROACH="${EMBED_APPROACH:-greedy}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
+EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
 EMBED_CODEWORD="${EMBED_CODEWORD:-63}"         # M value in M{codeword}_t{tval} path
 EMBED_WORKERS="${EMBED_WORKERS:-16}"
 EMBEDDED_ECC_DIR="${EMBEDDED_ECC_DIR:-${ARTIFACTS_DIR}/embeddedECC}"

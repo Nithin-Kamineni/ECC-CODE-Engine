@@ -1,0 +1,26 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Maintainer ECC-CODE-Engine
+    Description C++17 container for parallel ECC weight embedding (search3, greedy, no)
+    Version 1.0
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        make \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+    # Verify g++ is available and supports C++17
+    g++ --version
+    echo "int main(){}" | g++ -std=c++17 -x c++ - -o /dev/null && echo "C++17 OK"
+
+%environment
+    export LC_ALL=C
+    export LANG=C
+
+%runscript
+    exec "$@"
