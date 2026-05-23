@@ -227,8 +227,9 @@ def main():
     ap.add_argument("--top-sensitive", type=int, default=100,
                     help="Minimum sensitive nodes to mark per layer. "
                          "Final count = max(threshold_count, top_sensitive).")
-    ap.add_argument("--n-random-strides", type=int, default=400)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-stride", type=int, default=256,
+                    help="Maximum allowed stride s (hardware burst-fetch size in weights). "
+                         "All s in [2, min(max_stride, N-1)] are evaluated exhaustively.")
 
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--model-path", default=None,
@@ -343,8 +344,8 @@ def main():
                 continue
             results = fp.search(sens, group_size=args.group_size,
                                 threshold=thr, max_sens=args.max_sens,
-                                n_random_strides=args.n_random_strides,
-                                seed=args.seed, verbose=False)
+                                max_stride=args.max_stride,
+                                verbose=False)
             baseline = fp.evaluate(sens, np.arange(N), args.group_size,
                                    thr, args.max_sens)
             best = results[0]

@@ -56,6 +56,10 @@ TOP_SENSITIVE="${TOP_SENSITIVE:-100}"
 # SENS_THRESHOLD: Taylor score cutoff — weights above this are counted as sensitive.
 # The final sensitive set = max(threshold_count, TOP_SENSITIVE).
 SENS_THRESHOLD="${SENS_THRESHOLD:-0.001}"
+# MAX_STRIDE: Maximum allowed stride s in perm[k]=(k*s) mod N.
+# Set equal to your hardware's burst-fetch size (in number of weights).
+# Strides s > MAX_STRIDE are never evaluated — keeps all accesses within one fetch tile.
+MAX_STRIDE="${MAX_STRIDE:-256}"
 
 # ---- Skip training if float32 checkpoint already exists ----
 # Set SKIP_TRAIN=true to skip training and go directly to quantization
@@ -65,7 +69,7 @@ SKIP_TRAIN="${SKIP_TRAIN:-false}"
 # ---- Disable pattern search (identity permutation only) ----
 # Set DISABLE_PATTERN_FIND=true to skip the interleaver search and save weights
 # in their original order (identity permutation) for every layer.
-DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-true}"
+DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 
 # ---- EmbeddingECC — separate control lists (independent of 1-3 pipeline vars) ----
 # Modify these to subset the combinations you actually want to embed.
@@ -75,7 +79,7 @@ EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
 EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
 # EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
 EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8}"   # quantized levels only (not float32)
-EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
+EMBED_APPROACH="${EMBED_APPROACH:-greedy}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
 EMBED_CODEWORD="${EMBED_CODEWORD:-63}"         # M value in M{codeword}_t{tval} path
 EMBED_WORKERS="${EMBED_WORKERS:-16}"
 EMBEDDED_ECC_DIR="${EMBEDDED_ECC_DIR:-${ARTIFACTS_DIR}/embeddedECC}"
@@ -89,7 +93,7 @@ export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        MODELS_DIR SENSITIVITY_DIR PATTERNS_DIR IMAGENET_ROOT \
        DATASETS ARCHS BATCH_SIZE DEVICE QUANTIZE_BITS QUANT_LEVELS \
        TOP_LAYERS TOP_PER_LAYER LAYER_METRIC MAX_BATCHES \
-       GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD SKIP_TRAIN \
+       GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD MAX_STRIDE SKIP_TRAIN \
        DISABLE_PATTERN_FIND \
        EMBED_DATASETS EMBED_ARCHS EMBED_QUANT_BITS EMBED_APPROACH \
        EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR

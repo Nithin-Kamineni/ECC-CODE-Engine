@@ -61,7 +61,7 @@ echo "[3-PatternFinder/run.sh] SIF=${SIF}"
 echo "[3-PatternFinder/run.sh] DATASETS=${DATASETS}"
 echo "[3-PatternFinder/run.sh] ARCHS=${ARCHS}"
 echo "[3-PatternFinder/run.sh] QUANT_LEVELS=${QUANT_LEVELS}"
-echo "[3-PatternFinder/run.sh] GROUP_SIZE=${GROUP_SIZE}  MAX_SENS=${MAX_SENS}  TOP_SENSITIVE=${TOP_SENSITIVE}  SENS_THRESHOLD=${SENS_THRESHOLD}"
+echo "[3-PatternFinder/run.sh] GROUP_SIZE=${GROUP_SIZE}  MAX_SENS=${MAX_SENS}  TOP_SENSITIVE=${TOP_SENSITIVE}  SENS_THRESHOLD=${SENS_THRESHOLD}  MAX_STRIDE=${MAX_STRIDE}"
 echo "[3-PatternFinder/run.sh] PATTERNS_DIR=${PATTERNS_DIR}"
 
 # ---- Loop over all dataset × arch × quantization level combinations ----
@@ -127,7 +127,8 @@ for DS in $DATASETS; do
                     --group-size    "${GROUP_SIZE}" \
                     --max-sens      "${MAX_SENS}" \
                     --top-sensitive "${TOP_SENSITIVE}" \
-                    --threshold     "${SENS_THRESHOLD}"
+                    --threshold     "${SENS_THRESHOLD}" \
+                    --max-stride    "${MAX_STRIDE}"
 
             echo "[3-PatternFinder] ${DS}/${ARC}/${LABEL} done (exit $?)"
 
