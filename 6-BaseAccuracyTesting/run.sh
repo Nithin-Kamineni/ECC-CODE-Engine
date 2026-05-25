@@ -22,7 +22,7 @@
 #   EMBED_APPROACH / EMBED_CODEWORD
 # =============================================================================
 
-#SBATCH --job-name=ecc-base-acc
+#SBATCH --job-name=6-ecc-base-acc
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -82,21 +82,20 @@ for DS in $EMBED_DATASETS; do
                 IMAGENET_ARG="--imagenet-root ${IMAGENET_ROOT}"
             fi
 
-            srun --cpu-bind=cores --mem-bind=local \
-                singularity exec \
-                    --nv \
-                    --bind /blue \
-                    "${SIF}" \
-                    python3 "${SCRIPT_DIR}/test_accuracy.py" \
-                        --dataset       "${DS}" \
-                        --arch          "${ARC}" \
-                        --quant-bits    "${BITS}" \
-                        --t-value       "${T_VALUE}" \
-                        --approach      "${EMBED_APPROACH}" \
-                        --codeword      "${EMBED_CODEWORD}" \
-                        --ecc-dir       "${EMBEDDED_ECC_DIR}" \
-                        --results-dir   "${RESULTS_DIR}" \
-                        ${IMAGENET_ARG}
+            singularity exec \
+                --nv \
+                --bind /blue \
+                "${SIF}" \
+                python3 "${SCRIPT_DIR}/test_accuracy.py" \
+                    --dataset       "${DS}" \
+                    --arch          "${ARC}" \
+                    --quant-bits    "${BITS}" \
+                    --t-value       "${T_VALUE}" \
+                    --approach      "${EMBED_APPROACH}" \
+                    --codeword      "${EMBED_CODEWORD}" \
+                    --ecc-dir       "${EMBEDDED_ECC_DIR}" \
+                    --results-dir   "${RESULTS_DIR}" \
+                    ${IMAGENET_ARG}
 
             echo "[6-BaseAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done

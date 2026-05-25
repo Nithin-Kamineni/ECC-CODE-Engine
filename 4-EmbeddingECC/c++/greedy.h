@@ -72,16 +72,27 @@ static EvalResult greedy_evaluate(
     for (int j = 0; j < (int)parity.size(); j++)
         bits[part.parity_indices[j]] = parity[j];
 
-    // L2 score
+    // L2 score — use FULL bucket value change (message bits + BCH parity).
+    // Parity bits also reside in buckets; true distortion includes their contribution.
+    // Compare assembled bits[] against ch.buckets[b].value (original full value).
     float score = 0.0f;
     for (int b = 0; b < B; b++) {
-        float diff = (float)(new_vals[b] - metas[b].old_val);
+        const auto& bk_orig = ch.buckets[b];
+        int64_t full_new = 0;
+        for (int pos = bk_orig.start; pos < bk_orig.end; pos++) {
+            if (bits[pos]) full_new += (1LL << ch.weights[pos]);
+        }
+        float diff = (float)(full_new - bk_orig.value);
         score += metas[b].sens * diff * diff;
     }
 
-    // Tie-break: total L1 norm of deltas
+    // Tie-break: sum of absolute value-space deltas.
+    // Mirrors Python GreedyEncodeAndDecode.py line 203:
+    //   tie_break = int(np.abs(deltas).sum())
+    // where deltas are accumulated in value space (delta = move_unit * step).
+    // Do NOT divide by step here — that would count move-units, not value deltas.
     int tie = 0;
-    for (int b = 0; b < B; b++) tie += (int)std::abs(current_deltas[b] / (metas[b].step ? metas[b].step : 1));
+    for (int b = 0; b < B; b++) tie += (int)std::abs(current_deltas[b]);
 
     return {score, tie, bits, new_vals};
 }

@@ -80,21 +80,15 @@ def search(sens: np.ndarray, group_size: int = 8,
         print(f"  - exhaustive stride search  s ∈ [2, {limit}]  "
               f"({max(0, limit - 1)} candidates) ...")
 
-    # Pass 1: coprime strides (bijections — preferred)
+    # Only coprime strides produce valid bijections and can be safely inverted.
+    # Non-coprime strides are excluded: they game the evaluation metric
+    # (a non-bijective perm only samples gcd(s,N) distinct positions, so
+    # total_excess is artifically low) and corrupt downstream perm/weights files.
     for s in range(2, limit + 1):
         if gcd(s, n) == 1:
             perm = stride_perm(n, s)
             m = evaluate(sens, perm, group_size, threshold, max_sens)
-            results.append({"family": "stride", "param": s,
-                            "coprime": True, "metrics": m})
-
-    # Pass 2: non-coprime strides (fallback — only selected when no coprime fits)
-    for s in range(2, limit + 1):
-        if gcd(s, n) != 1:
-            perm = stride_perm(n, s)
-            m = evaluate(sens, perm, group_size, threshold, max_sens)
-            results.append({"family": "stride", "param": s,
-                            "coprime": False, "metrics": m})
+            results.append({"family": "stride", "param": s, "metrics": m})
 
     results.sort(key=lambda r: (r["metrics"]["total_excess"],
                                 r["metrics"]["max_in_group"]))
@@ -104,11 +98,10 @@ def search(sens: np.ndarray, group_size: int = 8,
         baseline = evaluate(sens, np.arange(n), group_size, threshold, max_sens)
         for k, v in baseline.items():
             print(f"  {k:18s}: {v}")
-        print(f"\n--- Top 10 stride patterns (s ≤ {limit}) ---")
+        print(f"\n--- Top 10 stride patterns (s ≤ {limit}, coprime only) ---")
         for r in results[:10]:
             m = r["metrics"]
-            bij = "bijection" if r["coprime"] else "fallback "
-            print(f"  stride s={str(r['param']):>5s}  [{bij}]  "
+            print(f"  stride s={str(r['param']):>5s}  "
                   f"excess={m['total_excess']:>7d}  "
                   f"violating={m['violating_groups']:>6d} "
                   f"({m['frac_violating']*100:5.2f}%)  "

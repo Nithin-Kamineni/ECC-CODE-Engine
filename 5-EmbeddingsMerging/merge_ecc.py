@@ -229,8 +229,20 @@ def process_combination(args, t_value, process_payload_fn, build_bch_fn,
         # Apply inv_perm to restore original weight ordering
         inv_perm_file = entry.get("inv_perm_file")
         if inv_perm_file and os.path.exists(inv_perm_file):
-            inv_perm       = np.load(inv_perm_file)
-            flat_original  = flat_encoded[inv_perm]
+            inv_perm = np.load(inv_perm_file)
+            # Validate: must be a complete permutation of [0, N).
+            # Garbage values (large out-of-range ints) indicate the file was
+            # generated from a non-bijective stride — re-run 3-PatternFinder.
+            if (int(inv_perm.max()) >= N or int(inv_perm.min()) < 0
+                    or len(np.unique(inv_perm)) != N):
+                raise RuntimeError(
+                    f"    [error] {layer_name}: inv_perm_file is invalid "
+                    f"(max={inv_perm.max()}, min={inv_perm.min()}, "
+                    f"unique={len(np.unique(inv_perm))}, N={N}). "
+                    f"Re-run 3-PatternFinder (with fixed find_pattern.py) "
+                    f"and 4-EmbeddingECC to regenerate correct files."
+                )
+            flat_original = flat_encoded[inv_perm]
         else:
             print(f"    [warn] inv_perm_file missing — using permuted ordering")
             flat_original  = flat_encoded

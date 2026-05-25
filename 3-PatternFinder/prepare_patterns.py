@@ -358,8 +358,19 @@ def main():
                   f"->{bm['max_in_group']})")
 
             # --- permutation index files ---
-            perm     = fp.make_perm(best["family"], best["param"], N)
-            inv_perm = np.empty_like(perm)
+            perm = fp.make_perm(best["family"], best["param"], N)
+            # Guard: non-bijective perm would corrupt weights_perm_file and inv_perm.
+            # This should never trigger after the find_pattern.py fix (coprime-only),
+            # but keep it as a hard safety net.
+            from math import gcd as _gcd
+            if len(np.unique(perm)) != N:
+                raise RuntimeError(
+                    f"[{L}] best stride s={best['param']} is non-bijective "
+                    f"(gcd={_gcd(int(best['param']), N)}, "
+                    f"{len(np.unique(perm))} unique values / {N} needed). "
+                    f"This would corrupt weights_perm_file and inv_perm — aborting."
+                )
+            inv_perm = np.zeros(N, dtype=perm.dtype)   # zeros, not empty_like
             inv_perm[perm] = np.arange(N, dtype=perm.dtype)
 
             perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_perm.npy")

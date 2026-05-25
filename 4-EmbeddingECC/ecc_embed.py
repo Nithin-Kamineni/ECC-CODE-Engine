@@ -328,37 +328,43 @@ def run_layer(layer_name, entry, args, t_value, chunk_size, message_parity_size,
     np.save(memmap_path, arr_u8)
 
     # ---- Sensitivity weighting (search3 / greedy / no) ----
+    sens_arr         = None
     sens_memmap_path = None
     if args.approach in ('search3', 'greedy', 'no'):
         if args.sensitivity_dir is None:
             raise ValueError("--sensitivity-dir is required for approach search3/greedy/no")
 
-        perm_arr = np.load(entry["perm_file"])
-        try:
-            sens_arr, sens_dict, baseline = _load_layer_sensitivity(
-                args.sensitivity_dir, ds_lower, args.arch, args.quant_bits,
-                layer_name, perm_arr,
-            )
-        except FileNotFoundError as exc:
-            if args.approach == 'no':
-                print(f"  [warn] {exc} — running without sensitivity weighting")
-                sens_arr = None
-            else:
-                raise   # search3/greedy: hard error
+        if getattr(args, 'no_sensitivity', False):
+            # Kill-switch: treat all weights as equally sensitive (score weight = 1.0).
+            # Controlled by --no-sensitivity flag (EMBED_SENSITIVITY=false in env.sh).
+            print(f"  [sens] {layer_name}: sensitivity disabled (--no-sensitivity) → all weights = 1.0")
+        else:
+            perm_arr = np.load(entry["perm_file"])
+            try:
+                sens_arr, sens_dict, baseline = _load_layer_sensitivity(
+                    args.sensitivity_dir, ds_lower, args.arch, args.quant_bits,
+                    layer_name, perm_arr,
+                )
+            except FileNotFoundError as exc:
+                if args.approach == 'no':
+                    print(f"  [warn] {exc} — running without sensitivity weighting")
+                    sens_arr = None
+                else:
+                    raise   # search3/greedy: hard error
 
-        if sens_arr is not None:
-            n_in_csv   = len(sens_dict)
-            n_baseline = N - n_in_csv
-            raw_min    = baseline
-            raw_max    = max(sens_dict.values()) if sens_dict else 0.0
-            raw_mean   = (sum(sens_dict.values()) / n_in_csv) if n_in_csv else 0.0
-            print(f"  [sens] {layer_name}: N={N:,}  in_CSV={n_in_csv} ({100*n_in_csv/N:.2f}%)  "
-                  f"baseline_fallback={n_baseline} ({100*n_baseline/N:.2f}%)")
-            print(f"  [sens]   raw taylor: min={raw_min:.3e}  max={raw_max:.3e}  "
-                  f"mean={raw_mean:.3e}  (normalized ÷ {raw_max:.3e})")
+            if sens_arr is not None:
+                n_in_csv   = len(sens_dict)
+                n_baseline = N - n_in_csv
+                raw_min    = baseline
+                raw_max    = max(sens_dict.values()) if sens_dict else 0.0
+                raw_mean   = (sum(sens_dict.values()) / n_in_csv) if n_in_csv else 0.0
+                print(f"  [sens] {layer_name}: N={N:,}  in_CSV={n_in_csv} ({100*n_in_csv/N:.2f}%)  "
+                      f"baseline_fallback={n_baseline} ({100*n_baseline/N:.2f}%)")
+                print(f"  [sens]   raw taylor: min={raw_min:.3e}  max={raw_max:.3e}  "
+                      f"mean={raw_mean:.3e}  (normalized ÷ {raw_max:.3e})")
 
-            sens_memmap_path = os.path.join(out_dir, ".tmp_sens.npy")
-            np.save(sens_memmap_path, sens_arr)
+                sens_memmap_path = os.path.join(out_dir, ".tmp_sens.npy")
+                np.save(sens_memmap_path, sens_arr)
 
     # Clean up any previous chunk files for this layer
     for f in pathlib.Path(out_dir).glob("chunks_p*.jsonl"):
@@ -421,6 +427,9 @@ def main():
     ap.add_argument("--sensitivity-dir", default=None,
                     help="Root of 0-Data/artifacts/sensitivity/ "
                          "(required for approach search3/greedy/no)")
+    ap.add_argument("--no-sensitivity", action="store_true", default=False,
+                    help="Disable sensitivity weighting: all bucket weights = 1.0 "
+                         "(controlled by EMBED_SENSITIVITY=false in env.sh)")
     args = ap.parse_args()
 
     t_value           = args.t_value

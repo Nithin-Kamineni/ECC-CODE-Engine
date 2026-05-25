@@ -22,7 +22,7 @@
 #   EMBED_APPROACH / EMBED_CODEWORD — must match what was used in 4-EmbeddingECC
 # =============================================================================
 
-#SBATCH --job-name=ecc-merge
+#SBATCH --job-name=5-ecc-merge
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -78,23 +78,22 @@ for DS in $EMBED_DATASETS; do
             echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE}"
             echo "========================================================"
 
-            srun --cpu-bind=cores --mem-bind=local \
-                singularity exec \
-                    --nv \
-                    --bind /blue \
-                    "${SIF}" \
-                    python3 "${SCRIPT_DIR}/merge_ecc.py" \
-                        --dataset       "${DS}" \
-                        --arch          "${ARC}" \
-                        --quant-bits    "${BITS}" \
-                        --t-value       "${T_VALUE}" \
-                        --approach      "${EMBED_APPROACH}" \
-                        --codeword      "${EMBED_CODEWORD}" \
-                        --patterns-dir  "${PATTERNS_DIR}" \
-                        --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
-                        --ecc-dir       "${EMBEDDED_ECC_DIR}" \
-                        --models-dir    "${MODELS_DIR}" \
-                        --ecc-source    "${ECC_SOURCE}"
+            singularity exec \
+                --nv \
+                --bind /blue \
+                "${SIF}" \
+                python3 "${SCRIPT_DIR}/merge_ecc.py" \
+                    --dataset       "${DS}" \
+                    --arch          "${ARC}" \
+                    --quant-bits    "${BITS}" \
+                    --t-value       "${T_VALUE}" \
+                    --approach      "${EMBED_APPROACH}" \
+                    --codeword      "${EMBED_CODEWORD}" \
+                    --patterns-dir  "${PATTERNS_DIR}" \
+                    --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
+                    --ecc-dir       "${EMBEDDED_ECC_DIR}" \
+                    --models-dir    "${MODELS_DIR}" \
+                    --ecc-source    "${ECC_SOURCE}"
 
             echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done

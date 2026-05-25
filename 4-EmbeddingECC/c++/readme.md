@@ -1,3 +1,11 @@
+To recompile the C++ binary after these changes:
+
+cd /blue/rewetz/vkamineni/Projects/ECC-CODE-Engine/4-EmbeddingECC/c++
+
+apptainer exec --bind /blue ecc_cpp.sif make -C "$PWD" -j4
+
+The Makefile lists bch.h and npy_reader.h as dependencies, so make will detect the changes and recompile automatically.
+
 # Project context: ECC-CODE-Engine — how the C++ embedding path is built and run
 
 Use this as project instructions (e.g. paste into the project's custom instructions, or save

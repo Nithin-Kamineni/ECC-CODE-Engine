@@ -30,7 +30,8 @@ IMAGENET_ROOT="${DATA_ROOT}/imagenet-val"
 
 # ---- Datasets to process (space-separated, override via env before sourcing) ----
 # Valid values: CIFAR10  CIFAR100  IMAGENET
-DATASETS="${DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
+# DATASETS="${DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
+DATASETS="${DATASETS:-IMAGENET}"
 
 # ---- Architectures (space-separated, must match torchvision/model names exactly) ----
 # Valid values: resnet18  resnet50  mobilenet_v2  efficientnet_b0  vgg16
@@ -51,7 +52,7 @@ MAX_BATCHES="${MAX_BATCHES:-8}"
 
 # ---- PatternFinder parameters ----
 GROUP_SIZE="${GROUP_SIZE:-8}"
-MAX_SENS="${MAX_SENS:-2}"
+MAX_SENS="${MAX_SENS:-3}"
 TOP_SENSITIVE="${TOP_SENSITIVE:-100}"
 # SENS_THRESHOLD: Taylor score cutoff — weights above this are counted as sensitive.
 # The final sensitive set = max(threshold_count, TOP_SENSITIVE).
@@ -73,8 +74,10 @@ DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 
 # ---- EmbeddingECC — separate control lists (independent of 1-3 pipeline vars) ----
 
-EMBED_RUN_CPP="${EMBED_RUN_CPP:-true}" # set to true to run the C++ embedding code (requires separate compile step)
+EMBED_SKIP_PROCESS="${EMBED_SKIP_PROCESS:-false}" # set to true to skip the embedding process
 
+EMBED_RUN_CPP="${EMBED_RUN_CPP:-true}" # set to true to run the C++ embedding code (requires separate compile step)
+EMBED_SENSITIVITY="${EMBED_SENSITIVITY:-false}"  # true = use sensitivity weights; false = all weights = 1.0 (uniform, disables loading)
 # Modify these to subset the combinations you actually want to embed.
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
@@ -99,4 +102,5 @@ export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD MAX_STRIDE SKIP_TRAIN \
        DISABLE_PATTERN_FIND \
        EMBED_DATASETS EMBED_ARCHS EMBED_QUANT_BITS EMBED_APPROACH \
-       EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR
+       EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR \
+       EMBED_RUN_CPP EMBED_SENSITIVITY EMBED_SKIP_PROCESS

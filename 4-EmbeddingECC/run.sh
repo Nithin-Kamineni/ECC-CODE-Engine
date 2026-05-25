@@ -27,13 +27,12 @@
 #   EMBED_WORKERS="16"              number of parallel workers
 # =============================================================================
 
-#SBATCH --job-name=ecc-embed
+#SBATCH --job-name=4-ecc-embed
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:l4:1
-#SBATCH --mem=64gb
+#SBATCH --mem=32gb
 #SBATCH --time=48:00:00
 #SBATCH --array=1,2,4,6
 #SBATCH --output=logs/%x.%A_%a.out
@@ -94,6 +93,41 @@ else
     echo "[4-EmbeddingECC] Using Python runner: ecc_embed.py"
 fi
 
+# ---- If using C++, export the BCH parity matrix from Python (galois.BCH) ----
+# The C++ scratch implementation uses a different primitive polynomial than
+# Python's galois library, producing an incompatible parity matrix.  We export
+# the galois.BCH matrix once per (codeword, t) pair and pass it to the binary.
+BCH_PARITY_FILE=""
+if [ "${USE_CPP}" = "true" ]; then
+    BCH_PARITY_FILE="/tmp/bch_P_${EMBED_CODEWORD}_t${T_VALUE}.npy"
+    if [ ! -f "${BCH_PARITY_FILE}" ]; then
+        echo "[4-EmbeddingECC] Exporting BCH(${EMBED_CODEWORD}, t=${T_VALUE}) parity matrix from Python ..."
+        singularity exec \
+            --nv \
+            --bind /blue \
+            "${SIF}" \
+            python3 "${CPP_DIR}/export_parity_matrix.py" \
+                --n      "${EMBED_CODEWORD}" \
+                --t      "${T_VALUE}" \
+                --output "${BCH_PARITY_FILE}"
+        if [ $? -ne 0 ]; then
+            echo "[4-EmbeddingECC] ERROR: Failed to export BCH parity matrix"
+            exit 1
+        fi
+    else
+        echo "[4-EmbeddingECC] Reusing cached parity matrix: ${BCH_PARITY_FILE}"
+    fi
+fi
+
+# ---- Sensitivity kill-switch (EMBED_SENSITIVITY=false → all weights = 1.0) ----
+SENS_FLAG=""
+if [ "${EMBED_SENSITIVITY}" != "true" ]; then
+    SENS_FLAG="--no-sensitivity"
+    echo "[4-EmbeddingECC] EMBED_SENSITIVITY=${EMBED_SENSITIVITY} → sensitivity disabled (all weights = 1.0)"
+else
+    echo "[4-EmbeddingECC] EMBED_SENSITIVITY=true → using sensitivity weights"
+fi
+
 # ---- Loop over all dataset × arch × quant-bits combinations ----
 for DS in $EMBED_DATASETS; do
     for ARC in $EMBED_ARCHS; do
@@ -113,39 +147,40 @@ for DS in $EMBED_DATASETS; do
 
             if [ "${USE_CPP}" = "true" ]; then
                 # ---- C++ runner ----
-                srun --cpu-bind=cores --mem-bind=local \
-                    singularity exec \
-                        --bind /blue \
-                        "${CPP_SIF}" \
-                        "${CPP_BINARY}" \
-                            --dataset       "${DS}" \
-                            --arch          "${ARC}" \
-                            --quant-bits    "${BITS}" \
-                            --t-value       "${T_VALUE}" \
-                            --approach      "${EMBED_APPROACH}" \
-                            --codeword      "${EMBED_CODEWORD}" \
-                            --workers       "${EMBED_WORKERS}" \
-                            --patterns-dir  "${PATTERNS_DIR}" \
-                            --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
-                            --sensitivity-dir "${SENSITIVITY_DIR}"
+                singularity exec \
+                    --bind /blue \
+                    "${CPP_SIF}" \
+                    "${CPP_BINARY}" \
+                        --dataset         "${DS}" \
+                        --arch            "${ARC}" \
+                        --quant-bits      "${BITS}" \
+                        --t-value         "${T_VALUE}" \
+                        --approach        "${EMBED_APPROACH}" \
+                        --codeword        "${EMBED_CODEWORD}" \
+                        --workers         "${EMBED_WORKERS}" \
+                        --patterns-dir    "${PATTERNS_DIR}" \
+                        --chunks-dir      "${EMBEDDED_ECC_CHUNKS_DIR}" \
+                        --sensitivity-dir "${SENSITIVITY_DIR}" \
+                        --parity-matrix   "${BCH_PARITY_FILE}" \
+                        ${SENS_FLAG}
             else
                 # ---- Python runner ----
-                srun --cpu-bind=cores --mem-bind=local \
-                    singularity exec \
-                        --nv \
-                        --bind /blue \
-                        "${SIF}" \
-                        python3 "${SCRIPT_DIR}/ecc_embed.py" \
-                            --dataset       "${DS}" \
-                            --arch          "${ARC}" \
-                            --quant-bits    "${BITS}" \
-                            --t-value       "${T_VALUE}" \
-                            --approach      "${EMBED_APPROACH}" \
-                            --codeword      "${EMBED_CODEWORD}" \
-                            --workers       "${EMBED_WORKERS}" \
-                            --patterns-dir  "${PATTERNS_DIR}" \
-                            --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
-                            --sensitivity-dir "${SENSITIVITY_DIR}"
+                singularity exec \
+                    --nv \
+                    --bind /blue \
+                    "${SIF}" \
+                    python3 "${SCRIPT_DIR}/ecc_embed.py" \
+                        --dataset       "${DS}" \
+                        --arch          "${ARC}" \
+                        --quant-bits    "${BITS}" \
+                        --t-value       "${T_VALUE}" \
+                        --approach      "${EMBED_APPROACH}" \
+                        --codeword      "${EMBED_CODEWORD}" \
+                        --workers       "${EMBED_WORKERS}" \
+                        --patterns-dir  "${PATTERNS_DIR}" \
+                        --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
+                        --sensitivity-dir "${SENSITIVITY_DIR}" \
+                        ${SENS_FLAG}
             fi
 
             echo "[4-EmbeddingECC] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"

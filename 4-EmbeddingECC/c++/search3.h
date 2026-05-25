@@ -21,8 +21,14 @@ struct BucketMeta {
     int             b_idx;           // bucket index
     std::vector<int> message_pos;    // positions in ch.bits that are message bits for this bucket
     std::vector<int> m_indices;      // corresponding indices into the message_indices array
-    int64_t          old_val;        // original bucket integer value
-    int64_t          max_val;        // maximum representable value with message bits
+    // old_val = MESSAGE-PARTIAL value: sum of 2^w for message bits that are 1.
+    // This intentionally does NOT include parity bit contributions to the bucket.
+    // Reason: range checks and bit extraction operate in message-partial space;
+    //         mixing in parity contributions (which can be large at high t-values)
+    //         causes valid moves to be rejected and wrong bits to be extracted.
+    // The ORIGINAL FULL bucket value (for score computation) is in ch.buckets[b].value.
+    int64_t          old_val;
+    int64_t          max_val;        // max message-partial value (all message bits = 1)
     int64_t          step;           // 2^(min_weight_in_message_bits)
     bool             has_msg;        // any message bits in this bucket?
     float            sens;           // sensitivity weight (1.0 if none)
@@ -73,7 +79,6 @@ inline std::vector<BucketMeta> build_bucket_meta(
         const auto& bk = ch.buckets[b];
         BucketMeta& meta = metas[b];
         meta.b_idx   = b;
-        meta.old_val = bk.value;
         meta.sens    = (sens_weights && b < (int)sens_weights->size()) ? (*sens_weights)[b] : 1.0f;
 
         // Collect message positions in [bk.start, bk.end)
@@ -94,9 +99,17 @@ inline std::vector<BucketMeta> build_bucket_meta(
             int64_t mx = 0;
             for (int pos : meta.message_pos) mx += (1LL << ch.weights[pos]);
             meta.max_val = mx;
+            // MESSAGE-PARTIAL old value: sum of 2^w for message bits that are 1.
+            // Intentionally excludes parity bit contributions so that range checks
+            // (0 ≤ new_val ≤ max_val) and bit extraction (new_val >> w) & 1 are correct.
+            int64_t msg_partial = 0;
+            for (int pos : meta.message_pos)
+                if (ch.bits[pos]) msg_partial += (1LL << ch.weights[pos]);
+            meta.old_val = msg_partial;
         } else {
             meta.step    = 0;
             meta.max_val = 0;
+            meta.old_val = 0;
         }
     }
     return metas;
@@ -210,8 +223,19 @@ inline Chunk search3_encode(
             candidate[part.parity_indices[j]] = parity[j];
         }
 
-        // Score (L2 weighted)
-        float score = compute_score_l2(metas, new_vals);
+        // Score (L2 weighted) — use FULL bucket value change (message bits + BCH parity).
+        // Parity bits also reside in buckets, so the true distortion includes their
+        // contribution.  Compare against ch.buckets[b].value (the original full value).
+        float score = 0.0f;
+        for (int b = 0; b < B; b++) {
+            const auto& bk_orig = ch.buckets[b];
+            int64_t full_new = 0;
+            for (int pos = bk_orig.start; pos < bk_orig.end; pos++) {
+                if (candidate[pos]) full_new += (1LL << ch.weights[pos]);
+            }
+            float diff = (float)(full_new - bk_orig.value);
+            score += metas[b].sens * diff * diff;
+        }
 
         if (score < best_score || (score == best_score && tie < best_tie)) {
             best_score    = score;

@@ -24,7 +24,7 @@
 # Run AFTER 5-EmbeddingsMerging has finished.
 # =============================================================================
 
-#SBATCH --job-name=ecc-sens-acc
+#SBATCH --job-name=7-ecc-sens-acc
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -89,26 +89,25 @@ for DS in $EMBED_DATASETS; do
                 IMAGENET_ARG="--imagenet-root ${IMAGENET_ROOT}"
             fi
 
-            srun --cpu-bind=cores --mem-bind=local \
-                singularity exec \
-                    --nv \
-                    --bind /blue \
-                    "${SIF}" \
-                    python3 "${SCRIPT_DIR}/sensitive_test_accuracy.py" \
-                        --dataset           "${DS}" \
-                        --arch              "${ARC}" \
-                        --quant-bits        "${BITS}" \
-                        --t-value           "${T_VALUE}" \
-                        --approach          "${EMBED_APPROACH}" \
-                        --codeword          "${EMBED_CODEWORD}" \
-                        --ecc-dir           "${EMBEDDED_ECC_DIR}" \
-                        --models-dir        "${MODELS_DIR}" \
-                        --sensitivity-dir   "${SENSITIVITY_DIR}" \
-                        --results-dir       "${RESULTS_DIR}" \
-                        --numel-threshold   "${NUMEL_THRESHOLD}" \
-                        --score-percentile  "${SCORE_PERCENTILE}" \
-                        --max-protect       "${MAX_PROTECT}" \
-                        ${IMAGENET_ARG}
+            singularity exec \
+                --nv \
+                --bind /blue \
+                "${SIF}" \
+                python3 "${SCRIPT_DIR}/sensitive_test_accuracy.py" \
+                    --dataset           "${DS}" \
+                    --arch              "${ARC}" \
+                    --quant-bits        "${BITS}" \
+                    --t-value           "${T_VALUE}" \
+                    --approach          "${EMBED_APPROACH}" \
+                    --codeword          "${EMBED_CODEWORD}" \
+                    --ecc-dir           "${EMBEDDED_ECC_DIR}" \
+                    --models-dir        "${MODELS_DIR}" \
+                    --sensitivity-dir   "${SENSITIVITY_DIR}" \
+                    --results-dir       "${RESULTS_DIR}" \
+                    --numel-threshold   "${NUMEL_THRESHOLD}" \
+                    --score-percentile  "${SCORE_PERCENTILE}" \
+                    --max-protect       "${MAX_PROTECT}" \
+                    ${IMAGENET_ARG}
 
             echo "[7-SensitiveAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done

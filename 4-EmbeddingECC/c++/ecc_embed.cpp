@@ -40,6 +40,8 @@ struct Args {
     std::string chunks_dir;
     std::string sensitivity_dir;
     int         move_range      = 4;
+    std::string parity_matrix;  // optional: path to Python-exported P matrix .npy
+    bool        no_sensitivity  = false;  // --no-sensitivity: skip loading, use sens=1.0 for all
 };
 
 static void print_usage(const char* prog) {
@@ -47,7 +49,9 @@ static void print_usage(const char* prog) {
         "Usage: %s --dataset DS --arch ARCH --quant-bits N --t-value T\n"
         "           --approach (search3|greedy|no) --codeword (63|127|255)\n"
         "           --workers W --patterns-dir PATH --chunks-dir PATH\n"
-        "           [--sensitivity-dir PATH] [--move-range R]\n",
+        "           [--sensitivity-dir PATH] [--move-range R]\n"
+        "           [--parity-matrix PATH]  # .npy exported by export_parity_matrix.py\n"
+        "           [--no-sensitivity]      # disable sensitivity: all bucket weights = 1.0\n",
         prog);
 }
 
@@ -70,6 +74,8 @@ static Args parse_args(int argc, char** argv) {
         else if (key == "--chunks-dir")      args.chunks_dir     = next();
         else if (key == "--sensitivity-dir") args.sensitivity_dir= next();
         else if (key == "--move-range")      args.move_range     = std::stoi(next());
+        else if (key == "--parity-matrix")   args.parity_matrix  = next();
+        else if (key == "--no-sensitivity")  args.no_sensitivity = true;
         else if (key == "--help") { print_usage(argv[0]); exit(0); }
         else { fprintf(stderr, "Unknown argument: %s\n", key.c_str()); print_usage(argv[0]); exit(1); }
     }
@@ -117,7 +123,18 @@ static std::vector<float> load_sensitivity(
             size_t idx = (size_t)(*perm)[i];
             s2[i] = (idx < sens.size()) ? sens[idx] : 0.0f;
         }
-        return s2;
+        sens = std::move(s2);
+    }
+
+    // Normalize to [0.5, 1.0] — mirrors ecc_embed.py line 88:
+    //   sens_arr = 0.5 + 0.5 * (sens_arr / max_val)
+    // Without this, non-sensitive weights carry 0.0 cost (completely free to flip),
+    // while Python assigns them a baseline cost of 0.5.
+    float max_val = *std::max_element(sens.begin(), sens.end());
+    if (max_val > 0.0f) {
+        for (auto& v : sens) v = 0.5f + 0.5f * (v / max_val);
+    } else {
+        std::fill(sens.begin(), sens.end(), 1.0f);  // all-zero fallback → uniform weight
     }
     return sens;
 }
@@ -162,9 +179,11 @@ static void process_layer(
         w_u8[i] = (uint8_t)((int)w_int8[i] + 128);
 
     // Load sensitivity array (optional, for search3/greedy)
+    // Skipped entirely when --no-sensitivity is set (EMBED_SENSITIVITY=false in env.sh):
+    // sens_ptr stays nullptr → build_bucket_meta sets meta.sens=1.0f for all buckets.
     std::vector<float>  sens_vec;
     const float*        sens_ptr = nullptr;
-    if (approach != Approach::NO) {
+    if (approach != Approach::NO && !args.no_sensitivity) {
         // Try to load sens.npy from patterns dir
         std::string layer_safe = sanitize(layer_name);
         std::string sens_path  = args.patterns_dir + "/" + ds_lower(args.dataset) + "/" +
@@ -184,6 +203,10 @@ static void process_layer(
             if (sens_vec.size() < N) sens_vec.resize(N, 0.0f);
             sens_ptr = sens_vec.data();
         }
+    } else if (args.no_sensitivity) {
+        fprintf(stdout, "  [sens] %s: sensitivity disabled (--no-sensitivity) → all weights = 1.0\n",
+                layer_name.c_str());
+        fflush(stdout);
     }
 
     // Output directory for this layer's chunks
@@ -249,16 +272,41 @@ int main(int argc, char** argv) {
             manifest_path.c_str(), manifest.size());
     fflush(stdout);
 
-    // Build BCH parity matrix once, shared by all workers
+    // Build BCH parity matrix once, shared by all workers.
+    //
+    // Prefer --parity-matrix file (exported by export_parity_matrix.py using
+    // galois.BCH) so that C++ uses the SAME matrix as Python.  Fall back to
+    // the C++ scratch implementation only when the file is not supplied — that
+    // path produces a different (incompatible) matrix and should not be used
+    // for production runs where Python accuracy is the reference.
     PMatrix P;
     if (approach != Approach::NO) {
-        fprintf(stdout, "[bch] Computing BCH(%d, %d, t=%d) parity matrix ...\n",
+        if (!args.parity_matrix.empty()) {
+            if (!std::filesystem::exists(args.parity_matrix)) {
+                fprintf(stderr, "[bch] ERROR: --parity-matrix file not found: %s\n",
+                        args.parity_matrix.c_str());
+                return 1;
+            }
+            fprintf(stdout, "[bch] Loading parity matrix from %s ...\n",
+                    args.parity_matrix.c_str());
+            fflush(stdout);
+            P = pmatrix_from_npy(args.parity_matrix);
+            fprintf(stdout, "[bch] Parity matrix loaded: %d × %d\n", P.k, P.r);
+            fflush(stdout);
+        } else {
+            fprintf(stdout,
+                "[bch] WARNING: --parity-matrix not supplied; computing BCH(%d, %d, t=%d) "
+                "parity matrix from scratch.  This uses a different primitive polynomial "
+                "than Python's galois.BCH and will produce lower accuracy than the Python "
+                "reference.  Pass --parity-matrix (run export_parity_matrix.py first) for "
+                "bit-exact Python compatibility.\n",
                 args.codeword, message_size, args.t_value);
-        fflush(stdout);
-        auto P_raw = bch_parity_matrix(args.codeword, message_size, args.t_value);
-        P = PMatrix(P_raw);
-        fprintf(stdout, "[bch] Parity matrix built: %d × %d\n", P.k, P.r);
-        fflush(stdout);
+            fflush(stdout);
+            auto P_raw = bch_parity_matrix(args.codeword, message_size, args.t_value);
+            P = PMatrix(P_raw);
+            fprintf(stdout, "[bch] Parity matrix built (scratch): %d × %d\n", P.k, P.r);
+            fflush(stdout);
+        }
     }
 
     // Process each layer
