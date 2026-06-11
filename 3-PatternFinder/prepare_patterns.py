@@ -97,6 +97,42 @@ def _load_raw_sd_from_ckpt(model_path: str) -> dict:
     return sd
 
 
+def _load_raw_sd_from_qat_ckpt(model_path: str) -> dict:
+    """Return {name: numpy_array} of int8 weights derived from a QAT checkpoint.
+
+    QAT checkpoints store fake-quantized FLOAT32 weights plus per-channel
+    `meta.scales` (1D, shape [OC] — one scale per output channel / dim 0 of
+    the weight tensor). Re-quantize to int8 via round(w/scale) so the rest of
+    the pipeline (which operates on raw int8 bit patterns) sees the same kind
+    of data as the PTQ path. `scales[k]` is reshaped to [OC,1,1,...] to
+    broadcast against the weight tensor's remaining dims.
+    """
+    import torch
+    ckpt = torch.load(model_path, map_location="cpu")
+    sd_f   = ckpt["state_dict"]
+    scales = ckpt["meta"]["scales"]
+    num_bits = ckpt["meta"]["num_bits"]
+    qmin, qmax = -(2 ** (num_bits - 1)), 2 ** (num_bits - 1) - 1
+    sd: dict = {}
+    for k, v in sd_f.items():
+        nk = k
+        for pfx in ("module.", "_orig_mod."):
+            if nk.startswith(pfx):
+                nk = nk[len(pfx):]
+        s = scales.get(k)
+        if s is not None:
+            s = s.to(torch.float32)
+            if s.dim() == 1 and v.dim() > 1:
+                # per-output-channel scale stored as (OC,) -> reshape to
+                # (OC, 1, 1, ...) so it broadcasts against dim 0 of v.
+                s = s.view(-1, *([1] * (v.dim() - 1)))
+            q = torch.round(v.to(torch.float32) / s).clamp(qmin, qmax).to(torch.int8)
+        else:
+            q = v.to(torch.int8)
+        sd[nk] = q.detach().cpu().numpy()
+    return sd
+
+
 import pandas as pd
 
 
@@ -230,6 +266,14 @@ def main():
     ap.add_argument("--max-stride", type=int, default=256,
                     help="Maximum allowed stride s (hardware burst-fetch size in weights). "
                          "All s in [2, min(max_stride, N-1)] are evaluated exhaustively.")
+    ap.add_argument("--top-k", type=int, default=10,
+                    help="Number of top candidate stride patterns to save per layer "
+                         "(used by 4-EmbeddingECC's greedy pattern selection). "
+                         "Ignored (forced to 1) with --identity-perm.")
+    ap.add_argument("--qmode", default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ: model_path holds qstate_dict (already int8/int16). "
+                         "QAT: model_path holds fake-quantized float32 state_dict + "
+                         "meta.scales; re-quantized to int8 here.")
 
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--model-path", default=None,
@@ -284,13 +328,20 @@ def main():
     # Use raw int8 values so ECC embedding operates on the actual quantized bit patterns.
     sd = {}
     if args.model_path and (args.run_search or args.identity_perm):
-        sd = _load_raw_sd_from_ckpt(args.model_path)
-        print(f"[model] loaded {len(sd)} tensors from {args.model_path}")
+        if args.qmode == "QAT":
+            sd = _load_raw_sd_from_qat_ckpt(args.model_path)
+        else:
+            sd = _load_raw_sd_from_ckpt(args.model_path)
+        print(f"[model] loaded {len(sd)} tensors from {args.model_path} (qmode={args.qmode})")
+
+    # top-K patterns saved per layer (forced to 1 for identity mode)
+    top_k = 1 if args.identity_perm else max(1, args.top_k)
 
     # combined flat-index export
     flat_export  = []
     search_summary = []
     manifest     = {}
+    top_patterns_manifest = {}
 
     for L in layers:
         if L not in numel_map:
@@ -357,37 +408,54 @@ def main():
                   f"{bm['total_excess']:,}  (max/group {baseline['max_in_group']}"
                   f"->{bm['max_in_group']})")
 
-            # --- permutation index files ---
-            perm = fp.make_perm(best["family"], best["param"], N)
-            # Guard: non-bijective perm would corrupt weights_perm_file and inv_perm.
-            # This should never trigger after the find_pattern.py fix (coprime-only),
-            # but keep it as a hard safety net.
+            # --- top-K candidate patterns: index files + permuted weights ---
             from math import gcd as _gcd
-            if len(np.unique(perm)) != N:
-                raise RuntimeError(
-                    f"[{L}] best stride s={best['param']} is non-bijective "
-                    f"(gcd={_gcd(int(best['param']), N)}, "
-                    f"{len(np.unique(perm))} unique values / {N} needed). "
-                    f"This would corrupt weights_perm_file and inv_perm — aborting."
-                )
-            inv_perm = np.zeros(N, dtype=perm.dtype)   # zeros, not empty_like
-            inv_perm[perm] = np.arange(N, dtype=perm.dtype)
+            n_results = min(top_k, len(results))
+            top_entries = []
+            layer_shape = list(sd[L].shape) if L in sd else None
+            for rank in range(n_results):
+                cand = results[rank]
+                cm = cand["metrics"]
 
-            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_perm.npy")
-            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_inv_perm.npy")
-            np.save(perm_file, perm)
-            np.save(inv_perm_file, inv_perm)
+                perm = fp.make_perm(cand["family"], cand["param"], N)
+                # Guard: non-bijective perm would corrupt weights_perm_file and inv_perm.
+                # This should never trigger after the find_pattern.py fix (coprime-only),
+                # but keep it as a hard safety net.
+                if len(np.unique(perm)) != N:
+                    raise RuntimeError(
+                        f"[{L}] rank {rank} stride s={cand['param']} is non-bijective "
+                        f"(gcd={_gcd(int(cand['param']), N)}, "
+                        f"{len(np.unique(perm))} unique values / {N} needed). "
+                        f"This would corrupt weights_perm_file and inv_perm — aborting."
+                    )
+                inv_perm = np.zeros(N, dtype=perm.dtype)   # zeros, not empty_like
+                inv_perm[perm] = np.arange(N, dtype=perm.dtype)
 
-            # --- permuted weights (only if checkpoint was loaded) ---
-            w_perm_file = None
-            layer_shape = None
-            if L in sd:
-                layer_shape = list(sd[L].shape)
-                w_flat      = sd[L].flatten()
-                w_perm      = w_flat[perm]
-                w_perm_file = os.path.join(args.out_dir,
-                                           f"{_sanitize(L)}_weights_perm.npy")
-                np.save(w_perm_file, w_perm)
+                perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_rank{rank}_perm.npy")
+                inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_rank{rank}_inv_perm.npy")
+                np.save(perm_file, perm)
+                np.save(inv_perm_file, inv_perm)
+
+                # --- permuted weights (only if checkpoint was loaded) ---
+                w_perm_file = None
+                if L in sd:
+                    w_flat      = sd[L].flatten()
+                    w_perm      = w_flat[perm]
+                    w_perm_file = os.path.join(args.out_dir,
+                                               f"{_sanitize(L)}_rank{rank}_weights_perm.npy")
+                    np.save(w_perm_file, w_perm)
+
+                top_entries.append({
+                    "rank":              rank,
+                    "family":            cand["family"],
+                    "param":             cand["param"],
+                    "excess":            cm["total_excess"],
+                    "max_in_group":      cm["max_in_group"],
+                    "violating_groups":  cm["violating_groups"],
+                    "perm_file":         perm_file,
+                    "inv_perm_file":     inv_perm_file,
+                    "weights_perm_file": w_perm_file,
+                })
 
             txt = os.path.join(args.out_dir, f"{_sanitize(L)}_best_pattern.txt")
             with open(txt, "w") as f:
@@ -398,7 +466,8 @@ def main():
                 f.write(f"identity baseline: {baseline}\n\n")
                 f.write(desc + "\n")
 
-            # --- manifest entry for this layer ---
+            rank0 = top_entries[0]
+            # --- manifest entry for this layer (rank0, kept for backward compat) ---
             manifest[L] = {
                 "layer":         L,
                 "N":             N,
@@ -408,16 +477,29 @@ def main():
                 "threshold":     float(thr),
                 "top_sensitive": args.top_sensitive,
                 "n_marked":      int(n_mark),
-                "best_family":   best["family"],
-                "best_param":    best["param"],
+                "best_family":   rank0["family"],
+                "best_param":    rank0["param"],
                 "identity_excess":        baseline["total_excess"],
-                "best_excess":            bm["total_excess"],
-                "best_violating_groups":  bm["violating_groups"],
-                "best_max_in_group":      bm["max_in_group"],
+                "best_excess":            rank0["excess"],
+                "best_violating_groups":  rank0["violating_groups"],
+                "best_max_in_group":      rank0["max_in_group"],
                 "model_path":    args.model_path,
-                "perm_file":     perm_file,
-                "inv_perm_file": inv_perm_file,
-                "weights_perm_file": w_perm_file,
+                "perm_file":     rank0["perm_file"],
+                "inv_perm_file": rank0["inv_perm_file"],
+                "weights_perm_file": rank0["weights_perm_file"],
+            }
+
+            # --- top-K manifest entry for this layer ---
+            top_patterns_manifest[L] = {
+                "layer":           L,
+                "N":               N,
+                "shape":           layer_shape,
+                "group_size":      args.group_size,
+                "max_sens":        args.max_sens,
+                "threshold":       float(thr),
+                "identity_excess": baseline["total_excess"],
+                "model_path":      args.model_path,
+                "top_patterns":    top_entries,
             }
 
             search_summary.append({
@@ -434,8 +516,8 @@ def main():
             perm     = np.arange(N, dtype=np.int64)
             inv_perm = np.arange(N, dtype=np.int64)   # identity is its own inverse
 
-            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_perm.npy")
-            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_inv_perm.npy")
+            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_rank0_perm.npy")
+            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_rank0_inv_perm.npy")
             np.save(perm_file, perm)
             np.save(inv_perm_file, inv_perm)
 
@@ -444,7 +526,7 @@ def main():
             if L in sd:
                 layer_shape = list(sd[L].shape)
                 w_perm_file = os.path.join(args.out_dir,
-                                           f"{_sanitize(L)}_weights_perm.npy")
+                                           f"{_sanitize(L)}_rank0_weights_perm.npy")
                 np.save(w_perm_file, sd[L].flatten())   # original order, no reordering
 
             txt = os.path.join(args.out_dir, f"{_sanitize(L)}_best_pattern.txt")
@@ -471,6 +553,29 @@ def main():
                 "inv_perm_file":         inv_perm_file,
                 "weights_perm_file":     w_perm_file,
             }
+
+            top_patterns_manifest[L] = {
+                "layer":           L,
+                "N":               N,
+                "shape":           layer_shape,
+                "group_size":      args.group_size,
+                "max_sens":        args.max_sens,
+                "threshold":       None,
+                "identity_excess": None,
+                "model_path":      args.model_path,
+                "top_patterns": [{
+                    "rank":              0,
+                    "family":            "identity",
+                    "param":             None,
+                    "excess":            None,
+                    "max_in_group":      None,
+                    "violating_groups":  None,
+                    "perm_file":         perm_file,
+                    "inv_perm_file":     inv_perm_file,
+                    "weights_perm_file": w_perm_file,
+                }],
+            }
+
             search_summary.append({
                 "layer": L, "N": N, "selected": int(fidx.size),
                 "best_family": "identity", "best_param": None,
@@ -499,6 +604,14 @@ def main():
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
         print(f"[saved] {manifest_path}  ({len(manifest)} layers)")
+
+    if top_patterns_manifest:
+        import json
+        top_manifest_path = os.path.join(args.out_dir, "top_patterns_manifest.json")
+        with open(top_manifest_path, "w") as f:
+            json.dump(top_patterns_manifest, f, indent=2)
+        print(f"[saved] {top_manifest_path}  ({len(top_patterns_manifest)} layers, "
+              f"top_k={top_k})")
 
     print(f"\n[done] {args.out_dir}")
 

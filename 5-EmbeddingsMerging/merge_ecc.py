@@ -8,11 +8,18 @@ For each (dataset, arch, quant_bits, t_value, approach) combination:
      to the same embeddedECC_Chunks/ directory.
   4. Stitches all chunks in order; for each layer applies inv_perm to
      restore the original weight ordering.
-  5. Saves a reconstructed int8 checkpoint (.pth) with scales/metadata
-     copied from the original quantized model.
+  5. Saves a reconstructed checkpoint (.pth) with scales/metadata copied
+     from the original quantized model.  PTQ -> int8 qstate_dict.  QAT ->
+     dequantized float32 state_dict (arr_int8 * scales), preserving the
+     original meta (qat_baked, scales, num_bits).
+
+For approach="search3" with --top-patterns-dir/--best-patterns-dir given,
+each layer's pattern is resolved via top_patterns_manifest.json +
+best_pattern_selection.json (top-K greedy selection from 4-EmbeddingECC)
+instead of pattern_manifest.json's rank-0 pattern.
 
 Output:
-    0-Data/artifacts/embeddedECC/{ds}/{arch}/PTQ/{bit}/
+    0-Data/artifacts/embeddedECC/{ds}/{arch}/{PTQ,QAT}/{bit}/
         M{codeword}_t{tval}/{approach}/ECC_Embedded_model.pth
 
 Usage:
@@ -23,7 +30,8 @@ Usage:
         --chunks-dir    /path/to/0-Data/artifacts/embeddedECC_Chunks \
         --ecc-dir       /path/to/0-Data/artifacts/embeddedECC \
         --models-dir    /path/to/0-Data/artifacts/models \
-        --ecc-source    /path/to/4-EmbeddingECC
+        --ecc-source    /path/to/4-EmbeddingECC \
+        --qmode PTQ
 """
 
 import os, sys, json, argparse, pathlib
@@ -152,30 +160,69 @@ def process_combination(args, t_value, process_payload_fn, build_bch_fn,
     ds_lower = args.dataset.lower()
     m_tag    = f"M{args.codeword}_t{t_value}"
 
-    # Pattern manifest
-    manifest_path = Path(args.patterns_dir) / ds_lower / args.arch / "PTQ" / bit_label / "pattern_manifest.json"
-    if not manifest_path.exists():
-        print(f"  [skip] No manifest: {manifest_path}")
-        return
+    # Pattern manifest — top-K (greedy-selected) or legacy rank-0
+    use_topk = bool(args.top_patterns_dir and args.best_patterns_dir and approach == "search3")
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    if use_topk:
+        top_manifest_path = (Path(args.top_patterns_dir) / ds_lower / args.arch /
+                              args.qmode / bit_label / "top_patterns_manifest.json")
+        sel_path = (Path(args.best_patterns_dir) / ds_lower / args.arch /
+                    args.qmode / bit_label / m_tag / "best_pattern_selection.json")
+        if not top_manifest_path.exists():
+            print(f"  [skip] No top-patterns manifest: {top_manifest_path}")
+            return
+        if not sel_path.exists():
+            print(f"  [skip] No best-pattern selection: {sel_path}")
+            return
+
+        with open(top_manifest_path) as f:
+            top_manifest = json.load(f)
+        with open(sel_path) as f:
+            selection = json.load(f)
+
+        manifest = {}
+        for layer_name, entry in top_manifest.items():
+            top_patterns = entry.get("top_patterns", [])
+            if not top_patterns:
+                continue
+            layer_sel = selection.get("layers", {}).get(layer_name)
+            best_rank = layer_sel["best_rank"] if layer_sel else top_patterns[0]["rank"]
+            rank_entry = next((p for p in top_patterns if p["rank"] == best_rank), top_patterns[0])
+            manifest[layer_name] = {
+                "N":                 entry["N"],
+                "shape":             entry.get("shape"),
+                "weights_perm_file": rank_entry.get("weights_perm_file"),
+                "inv_perm_file":     rank_entry.get("inv_perm_file"),
+            }
+        manifest_source = top_manifest_path
+    else:
+        manifest_path = Path(args.patterns_dir) / ds_lower / args.arch / args.qmode / bit_label / "pattern_manifest.json"
+        if not manifest_path.exists():
+            print(f"  [skip] No manifest: {manifest_path}")
+            return
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        manifest_source = manifest_path
 
     # Original quantized checkpoint (for metadata/scales)
-    model_ckpt_path = Path(args.models_dir) / ds_lower / args.arch / "PTQ" / f"model_int{args.quant_bits}_ptq.pth"
+    if args.qmode == "QAT":
+        model_ckpt_path = Path(args.models_dir) / ds_lower / args.arch / "QAT" / f"model_int{args.quant_bits}_qat.pth"
+    else:
+        model_ckpt_path = Path(args.models_dir) / ds_lower / args.arch / "PTQ" / f"model_int{args.quant_bits}_ptq.pth"
     if not model_ckpt_path.exists():
         print(f"  [skip] No quantized checkpoint: {model_ckpt_path}")
         return
 
     orig_ckpt = torch.load(model_ckpt_path, map_location="cpu")
+    scales = orig_ckpt.get("meta", {}).get("scales", {}) if args.qmode == "QAT" else {}
 
     # Output .pth path
-    out_dir = Path(args.ecc_dir) / ds_lower / args.arch / "PTQ" / bit_label / m_tag / approach
+    out_dir = Path(args.ecc_dir) / ds_lower / args.arch / args.qmode / bit_label / m_tag / approach
     out_dir.mkdir(parents=True, exist_ok=True)
     out_pth  = out_dir / "ECC_Embedded_model.pth"
 
-    print(f"\n[merge] {args.dataset}/{args.arch}/{bit_label}/{m_tag}/{approach}")
-    print(f"  manifest: {manifest_path} ({len(manifest)} layers)")
+    print(f"\n[merge] {args.dataset}/{args.arch}/{args.qmode}/{bit_label}/{m_tag}/{approach}")
+    print(f"  manifest: {manifest_source} ({len(manifest)} layers)")
 
     new_state_dict = {}
     for layer_name, entry in manifest.items():
@@ -184,7 +231,7 @@ def process_combination(args, t_value, process_payload_fn, build_bch_fn,
         layer_safe = _sanitize(layer_name)
 
         # Directory where 4-EmbeddingECC wrote chunks for this layer
-        layer_dir = Path(args.chunks_dir) / ds_lower / args.arch / "PTQ" / bit_label / m_tag / approach / layer_safe
+        layer_dir = Path(args.chunks_dir) / ds_lower / args.arch / args.qmode / bit_label / m_tag / approach / layer_safe
 
         print(f"  [layer] {layer_name}  N={N:,}", end="", flush=True)
 
@@ -252,7 +299,24 @@ def process_combination(args, t_value, process_payload_fn, build_bch_fn,
             arr_orig = flat_original.reshape(shape, order="C")
         else:
             arr_orig = flat_original
-        new_state_dict[layer_name] = torch.from_numpy(np.array(arr_orig, dtype=np.int8, copy=False))
+
+        if args.qmode == "QAT":
+            # QAT checkpoints store fake-quantized float32 weights + per-channel
+            # scales — dequantize the merged int8 values back to float32.
+            scale_t = scales.get(layer_name)
+            if scale_t is None:
+                print(f"    [warn] {layer_name}: no scale in QAT meta — storing raw int8 values")
+                new_state_dict[layer_name] = torch.from_numpy(np.array(arr_orig, dtype=np.int8, copy=False))
+            else:
+                scale_arr = scale_t.to(torch.float32).numpy()
+                if scale_arr.ndim == 1 and arr_orig.ndim > 1:
+                    # per-output-channel scale stored as (OC,) -> reshape to
+                    # (OC, 1, 1, ...) so it broadcasts against dim 0 of arr_orig.
+                    scale_arr = scale_arr.reshape(-1, *([1] * (arr_orig.ndim - 1)))
+                float_arr = arr_orig.astype(np.float32) * scale_arr
+                new_state_dict[layer_name] = torch.from_numpy(float_arr)
+        else:
+            new_state_dict[layer_name] = torch.from_numpy(np.array(arr_orig, dtype=np.int8, copy=False))
 
     # Build new checkpoint: copy metadata from original, replace weights
     out_ckpt = {}
@@ -295,6 +359,13 @@ def main():
                     help="Root of 0-Data/artifacts/models/")
     ap.add_argument("--ecc-source",   required=True,
                     help="Path to 4-EmbeddingECC directory (for ECC tool imports)")
+    ap.add_argument("--qmode", default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ or QAT — selects patterns/chunks/models/embeddedECC subdirectory.")
+    ap.add_argument("--top-patterns-dir", default=None,
+                    help="Root of top_patterns_manifest.json (3-PatternFinder top-K output). "
+                         "Combined with --best-patterns-dir, used for approach=search3.")
+    ap.add_argument("--best-patterns-dir", default=None,
+                    help="Root of best_pattern_selection.json (4-EmbeddingECC greedy selection).")
     args = ap.parse_args()
 
     t_value             = args.t_value

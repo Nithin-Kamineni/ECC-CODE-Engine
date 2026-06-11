@@ -160,6 +160,85 @@ inline bool validate_coverage(size_t N, const std::string& log_dir) {
     return true;
 }
 
+// ---- Score worker thread function ---------------------------------------------
+// Same chunking/encoding as worker_fn, but does NOT write any chunks_p*.jsonl —
+// each thread accumulates the sum of its chunks' result.distortion into its own
+// slot of `thread_totals` (no shared-state synchronization needed).
+void score_worker_fn(
+    std::atomic<size_t>&     next_idx,
+    size_t                   N,
+    size_t                   chunk_size,
+    const uint8_t*           weights,
+    const float*             sens,
+    Approach                 approach,
+    int                      message_parity_size,
+    int                      message_size,
+    const PMatrix&           P,
+    double&                  total_out,      // this thread's accumulator slot
+    int                      move_range = 4)
+{
+    double total = 0.0;
+    while (true) {
+        size_t start = next_idx.fetch_add(chunk_size, std::memory_order_relaxed);
+        if (start >= N) break;
+        size_t end = std::min(start + chunk_size, N) - 1;  // inclusive
+        size_t count = end - start + 1;
+
+        auto result = process_payload(
+            weights + start, (int)count,
+            sens ? (sens + start) : nullptr,
+            approach,
+            (int)chunk_size,
+            message_parity_size,
+            message_size,
+            P,
+            move_range);
+
+        total += result.distortion;
+    }
+    total_out = total;
+}
+
+// ---- Score all chunks for one layer (no file output) --------------------------
+// Mirrors run_layer_workers(), but returns the sum of per-chunk "distorsion"
+// (result.distortion) across the whole layer instead of writing chunks_p*.jsonl.
+// This is the C++ analog of summing the "distorsion" field over chunks_p*.jsonl
+// in the Python greedy-selection flow.
+inline double score_layer_workers(
+    size_t           N,
+    size_t           chunk_size,
+    const uint8_t*   weights,
+    const float*     sens,
+    Approach         approach,
+    int              message_parity_size,
+    int              message_size,
+    const PMatrix&   P,
+    int              num_workers,
+    int              move_range = 4)
+{
+    std::atomic<size_t> next_idx{0};
+    std::vector<double> thread_totals(num_workers, 0.0);
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_workers);
+    for (int p = 0; p < num_workers; p++) {
+        threads.emplace_back(score_worker_fn,
+            std::ref(next_idx),
+            N, chunk_size,
+            weights, sens,
+            approach,
+            message_parity_size, message_size,
+            std::cref(P),
+            std::ref(thread_totals[p]),
+            move_range);
+    }
+    for (auto& t : threads) t.join();
+
+    double total = 0.0;
+    for (double v : thread_totals) total += v;
+    return total;
+}
+
 // ---- Run all workers for one layer -------------------------------------------
 inline void run_layer_workers(
     size_t           N,

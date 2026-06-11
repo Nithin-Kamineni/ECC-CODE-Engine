@@ -18,7 +18,7 @@ All utility/implementation files are copied locally under utils/ and
 implementations/ — no runtime imports from the RECC project directory.
 """
 
-import os, sys, json, time, argparse, pathlib
+import os, sys, json, time, shutil, argparse, pathlib
 import multiprocessing as mp
 import numpy as np
 import pandas as pd
@@ -52,7 +52,7 @@ _ALLOWED_APPROACHES = ('parfit', 'replace', 'no', 'parfix', 'search3', 'greedy')
 # Sensitivity loader
 # =============================================================================
 def _load_layer_sensitivity(sensitivity_dir, ds_lower, arch, quant_bits,
-                             layer_name, perm_arr):
+                             layer_name, perm_arr, qmode="PTQ"):
     """
     Build a normalized float64 sensitivity array aligned to the permuted weight order.
 
@@ -64,7 +64,7 @@ def _load_layer_sensitivity(sensitivity_dir, ds_lower, arch, quant_bits,
     """
     bit_label = f"{quant_bits}-bit"
     csv_path = os.path.join(
-        sensitivity_dir, ds_lower, arch, "PTQ", bit_label,
+        sensitivity_dir, ds_lower, arch, qmode, bit_label,
         f"layer_then_weight_{ds_lower}_{arch}_int{quant_bits}_L999xN30000_grad_norm.csv",
     )
     if not os.path.exists(csv_path):
@@ -295,7 +295,7 @@ def _sanitize(name: str) -> str:
 # Process one layer
 # =============================================================================
 def run_layer(layer_name, entry, args, t_value, chunk_size, message_parity_size,
-              message_size, p_matrix, bit_label):
+              message_size, p_matrix, bit_label, out_dir_override=None):
     weights_file = entry.get("weights_perm_file")
     if not weights_file or not os.path.exists(weights_file):
         print(f"  [skip] {layer_name}: weights_perm_file missing ({weights_file})")
@@ -316,11 +316,14 @@ def run_layer(layer_name, entry, args, t_value, chunk_size, message_parity_size,
     ds_lower   = args.dataset.lower()
     m_tag      = f"M{args.codeword}_t{t_value}"
     layer_safe = _sanitize(layer_name)
-    out_dir    = os.path.join(
-        args.chunks_dir,
-        ds_lower, args.arch, "PTQ", bit_label,
-        m_tag, args.approach, layer_safe,
-    )
+    if out_dir_override is not None:
+        out_dir = out_dir_override
+    else:
+        out_dir = os.path.join(
+            args.chunks_dir,
+            ds_lower, args.arch, args.qmode, bit_label,
+            m_tag, args.approach, layer_safe,
+        )
     os.makedirs(out_dir, exist_ok=True)
 
     # Temp memmap for worker read-only access
@@ -343,7 +346,7 @@ def run_layer(layer_name, entry, args, t_value, chunk_size, message_parity_size,
             try:
                 sens_arr, sens_dict, baseline = _load_layer_sensitivity(
                     args.sensitivity_dir, ds_lower, args.arch, args.quant_bits,
-                    layer_name, perm_arr,
+                    layer_name, perm_arr, args.qmode,
                 )
             except FileNotFoundError as exc:
                 if args.approach == 'no':
@@ -430,6 +433,21 @@ def main():
     ap.add_argument("--no-sensitivity", action="store_true", default=False,
                     help="Disable sensitivity weighting: all bucket weights = 1.0 "
                          "(controlled by EMBED_SENSITIVITY=false in env.sh)")
+    ap.add_argument("--qmode", default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ or QAT weight checkpoints (selects the patterns/ "
+                         "and sensitivity/ subdirectory).")
+    ap.add_argument("--top-patterns-dir", default=None,
+                    help="Root of 0-Data/artifacts/patterns/ containing "
+                         "top_patterns_manifest.json. When set, --approach greedy "
+                         "scores all candidate patterns per layer (greedy total "
+                         "distortion) and writes best_pattern_selection.json; "
+                         "--approach search3 reads that selection and embeds using "
+                         "each layer's winning pattern. Omit for the legacy "
+                         "single-pattern (pattern_manifest.json) flow.")
+    ap.add_argument("--best-patterns-dir", default=None,
+                    help="Root of 0-Data/artifacts/best_patterns/ for "
+                         "best_pattern_selection.json (written by --approach greedy, "
+                         "read by --approach search3 — both require --top-patterns-dir).")
     args = ap.parse_args()
 
     t_value           = args.t_value
@@ -451,8 +469,42 @@ def main():
         bit_label = f"{args.quant_bits}-bit"
 
     ds_lower     = args.dataset.lower()
+
+    # ---- Top-K pattern flow: greedy selection (Phase 1) / search3 with best pattern (Phase 2) ----
+    if args.top_patterns_dir and args.approach in ('greedy', 'search3'):
+        top_manifest_path = os.path.join(
+            args.top_patterns_dir, ds_lower, args.arch, args.qmode, bit_label,
+            "top_patterns_manifest.json",
+        )
+        if not os.path.exists(top_manifest_path):
+            print(f"[skip] No top-patterns manifest found: {top_manifest_path}")
+            return
+
+        with open(top_manifest_path) as f:
+            top_manifest = json.load(f)
+
+        print(f"[ecc_embed] dataset={args.dataset}  arch={args.arch}  qmode={args.qmode}  "
+              f"bits={bit_label}  t={t_value}  approach={args.approach}  "
+              f"codeword={message_parity_size}  chunk_size={chunk_size}  "
+              f"message_size={message_size}  workers={args.workers}")
+        print(f"[ecc_embed] top-patterns manifest: {top_manifest_path}  ({len(top_manifest)} layers)")
+
+        if not args.best_patterns_dir:
+            raise SystemExit("--top-patterns-dir requires --best-patterns-dir")
+
+        if args.approach == 'greedy':
+            _run_greedy_selection(top_manifest, args, t_value, chunk_size,
+                                   message_parity_size, message_size, p_matrix, bit_label)
+        else:
+            _run_search3_with_best_pattern(top_manifest, args, t_value, chunk_size,
+                                            message_parity_size, message_size, p_matrix, bit_label)
+
+        print(f"[ecc_embed] Done. All layers processed.")
+        return
+
+    # ---- Legacy single-pattern flow ----
     manifest_path = os.path.join(
-        args.patterns_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.patterns_dir, ds_lower, args.arch, args.qmode, bit_label,
         "pattern_manifest.json",
     )
     if not os.path.exists(manifest_path):
@@ -462,7 +514,7 @@ def main():
     with open(manifest_path) as f:
         manifest = json.load(f)
 
-    print(f"[ecc_embed] dataset={args.dataset}  arch={args.arch}  "
+    print(f"[ecc_embed] dataset={args.dataset}  arch={args.arch}  qmode={args.qmode}  "
           f"bits={bit_label}  t={t_value}  approach={args.approach}  "
           f"codeword={message_parity_size}  chunk_size={chunk_size}  "
           f"message_size={message_size}  workers={args.workers}")
@@ -473,6 +525,128 @@ def main():
                   message_parity_size, message_size, p_matrix, bit_label)
 
     print(f"[ecc_embed] Done. All layers processed.")
+
+
+# =============================================================================
+# Phase 1 — greedy total-distortion selection across top-K candidate patterns
+# =============================================================================
+def _run_greedy_selection(top_manifest, args, t_value, chunk_size,
+                           message_parity_size, message_size, p_matrix, bit_label):
+    ds_lower = args.dataset.lower()
+    m_tag    = f"M{args.codeword}_t{t_value}"
+
+    selection = {
+        "dataset":  ds_lower,
+        "arch":     args.arch,
+        "qmode":    args.qmode,
+        "bits":     args.quant_bits,
+        "codeword": args.codeword,
+        "t_value":  t_value,
+        "layers":   {},
+    }
+
+    for layer_name, entry in top_manifest.items():
+        top_patterns = entry.get("top_patterns", [])
+        if not top_patterns:
+            print(f"  [skip] {layer_name}: no top_patterns entries")
+            continue
+
+        if len(top_patterns) == 1:
+            rank0 = top_patterns[0]
+            selection["layers"][layer_name] = {
+                "best_rank":              rank0["rank"],
+                "best_param":             rank0.get("param"),
+                "best_total_distortion":  None,
+                "all_total_distortion":   [],
+                "skipped":                True,
+            }
+            continue
+
+        all_distortion = []
+        for rank_entry in top_patterns:
+            rank = rank_entry["rank"]
+            tmp_dir = os.path.join(
+                args.chunks_dir, ".tmp_greedy_select",
+                ds_lower, args.arch, args.qmode, bit_label, m_tag,
+                _sanitize(layer_name), f"rank{rank}",
+            )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            run_layer(layer_name, rank_entry, args, t_value, chunk_size,
+                      message_parity_size, message_size, p_matrix, bit_label,
+                      out_dir_override=tmp_dir)
+
+            total_distortion = 0.0
+            for jf in pathlib.Path(tmp_dir).glob("chunks_p*.jsonl"):
+                with open(jf) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        rec = json.loads(line)
+                        total_distortion += rec.get("distorsion", 0.0)
+            all_distortion.append(total_distortion)
+
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        best_idx = int(np.argmin(all_distortion))
+        best = top_patterns[best_idx]
+        selection["layers"][layer_name] = {
+            "best_rank":             best["rank"],
+            "best_param":            best.get("param"),
+            "best_total_distortion": all_distortion[best_idx],
+            "all_total_distortion":  all_distortion,
+            "skipped":               False,
+        }
+        print(f"  [greedy-select] {layer_name}: best_rank={best['rank']} "
+              f"(param={best.get('param')})  "
+              f"total_distortion={all_distortion[best_idx]:.4f}  "
+              f"all={['%.4f' % d for d in all_distortion]}")
+
+    out_dir = os.path.join(
+        args.best_patterns_dir, ds_lower, args.arch, args.qmode, bit_label, m_tag,
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "best_pattern_selection.json")
+    with open(out_path, "w") as f:
+        json.dump(selection, f, indent=2)
+    print(f"[ecc_embed] [greedy-select] saved {out_path}  ({len(selection['layers'])} layers)")
+
+
+# =============================================================================
+# Phase 2 — search3 embedding using each layer's selected best pattern
+# =============================================================================
+def _run_search3_with_best_pattern(top_manifest, args, t_value, chunk_size,
+                                    message_parity_size, message_size, p_matrix, bit_label):
+    ds_lower = args.dataset.lower()
+    m_tag    = f"M{args.codeword}_t{t_value}"
+
+    sel_path = os.path.join(
+        args.best_patterns_dir, ds_lower, args.arch, args.qmode, bit_label, m_tag,
+        "best_pattern_selection.json",
+    )
+    if not os.path.exists(sel_path):
+        raise SystemExit(
+            f"best_pattern_selection.json not found: {sel_path}\n"
+            f"Run --approach greedy with --top-patterns-dir/--best-patterns-dir first."
+        )
+    with open(sel_path) as f:
+        selection = json.load(f)
+
+    for layer_name, entry in top_manifest.items():
+        top_patterns = entry.get("top_patterns", [])
+        if not top_patterns:
+            print(f"  [skip] {layer_name}: no top_patterns entries")
+            continue
+
+        layer_sel = selection.get("layers", {}).get(layer_name)
+        best_rank = layer_sel["best_rank"] if layer_sel else top_patterns[0]["rank"]
+        rank_entry = next((p for p in top_patterns if p["rank"] == best_rank), top_patterns[0])
+
+        print(f"  [search3] {layer_name}: using best_rank={best_rank} "
+              f"(param={rank_entry.get('param')})")
+        run_layer(layer_name, rank_entry, args, t_value, chunk_size,
+                  message_parity_size, message_size, p_matrix, bit_label)
 
 
 if __name__ == "__main__":

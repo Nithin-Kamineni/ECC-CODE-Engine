@@ -12,10 +12,21 @@
 #   --array=1,2,4,6 creates 4 simultaneous jobs, one per t-value.
 #   Each job loops over all dataset/arch/quant-bits combinations.
 #
-#   Input:  0-Data/artifacts/patterns/{ds}/{arch}/PTQ/{bit}/pattern_manifest.json
-#           0-Data/artifacts/patterns/{ds}/{arch}/PTQ/{bit}/{layer}_weights_perm.npy
+#   PTQ vs QAT (QMODE) is selected by QAT_ENABLED, mirroring 2/3.
 #
-#   Output: 0-Data/artifacts/embeddedECC_Chunks/{ds}/{arch}/PTQ/{bit}/
+#   For EMBED_APPROACH=search3 (default), each combination runs TWO phases
+#   using the top-${TOP_PATTERNS} candidate patterns from 3-PatternFinder:
+#     Phase 1 (greedy): scores all candidate patterns per layer by total
+#                        greedy distortion, writes best_pattern_selection.json
+#     Phase 2 (search3): embeds using each layer's winning pattern
+#   Other approaches use the legacy single-pattern (rank 0) flow.
+#
+#   Input:  0-Data/artifacts/patterns/{ds}/{arch}/{PTQ,QAT}/{bit}/top_patterns_manifest.json
+#           0-Data/artifacts/patterns/{ds}/{arch}/{PTQ,QAT}/{bit}/{layer}_rank{i}_weights_perm.npy
+#
+#   Output: 0-Data/artifacts/best_patterns/{ds}/{arch}/{PTQ,QAT}/{bit}/M{codeword}_t{tval}/
+#               best_pattern_selection.json
+#           0-Data/artifacts/embeddedECC_Chunks/{ds}/{arch}/{PTQ,QAT}/{bit}/
 #               M{codeword}_t{tval}/{approach}/{layer}/chunks_p{p}.jsonl
 #
 # Overrides (pass via env before sbatch):
@@ -24,14 +35,14 @@
 #   EMBED_QUANT_BITS="8"            restrict to one quant level
 #   EMBED_APPROACH="parfit"         change ECC approach
 #   EMBED_CODEWORD="63"             change codeword length (M value)
-#   EMBED_WORKERS="16"              number of parallel workers
+#   EMBED_WORKERS="8"              number of parallel workers
 # =============================================================================
 
 #SBATCH --job-name=4-ecc-embed
-#SBATCH --partition=hpg-turin
+#SBATCH --partition=hpg-milan
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=32gb
 #SBATCH --time=48:00:00
 #SBATCH --array=1,2,4,6
@@ -53,6 +64,9 @@ module load singularity
 # ---- T-value from SLURM array task ID ----
 T_VALUE="${SLURM_ARRAY_TASK_ID}"
 
+# ---- PTQ vs QAT (mirrors 2-Sensitivity/run.sh and 3-PatternFinder/run.sh) ----
+QMODE="$( [ "${QAT_ENABLED}" = "true" ] && echo QAT || echo PTQ )"
+
 echo "[4-EmbeddingECC/run.sh] SIF=${SIF}"
 echo "[4-EmbeddingECC/run.sh] T_VALUE=${T_VALUE}  (SLURM array task)"
 echo "[4-EmbeddingECC/run.sh] EMBED_DATASETS=${EMBED_DATASETS}"
@@ -60,6 +74,8 @@ echo "[4-EmbeddingECC/run.sh] EMBED_ARCHS=${EMBED_ARCHS}"
 echo "[4-EmbeddingECC/run.sh] EMBED_QUANT_BITS=${EMBED_QUANT_BITS}"
 echo "[4-EmbeddingECC/run.sh] EMBED_APPROACH=${EMBED_APPROACH}  EMBED_CODEWORD=${EMBED_CODEWORD}"
 echo "[4-EmbeddingECC/run.sh] EMBED_RUN_CPP=${EMBED_RUN_CPP}"
+echo "[4-EmbeddingECC/run.sh] QAT_ENABLED=${QAT_ENABLED}  QMODE=${QMODE}"
+echo "[4-EmbeddingECC/run.sh] TOP_PATTERNS=${TOP_PATTERNS}  BEST_PATTERNS_DIR=${BEST_PATTERNS_DIR}"
 echo "[4-EmbeddingECC/run.sh] EMBEDDED_ECC_CHUNKS_DIR=${EMBEDDED_ECC_CHUNKS_DIR}"
 
 # ---- Decide: Python or C++ runner ----
@@ -146,7 +162,8 @@ if [ "${USE_CPP}" = "true" ] && [ "${EMBED_SENSITIVITY}" = "true" ]; then
                         --arch            "${ARC}" \
                         --quant-bits      "${BITS}" \
                         --patterns-dir    "${PATTERNS_DIR}" \
-                        --sensitivity-dir "${SENSITIVITY_DIR}"
+                        --sensitivity-dir "${SENSITIVITY_DIR}" \
+                        --qmode           "${QMODE}"
                 if [ $? -ne 0 ]; then
                     echo "[4-EmbeddingECC] ERROR: export_sensitivity.py failed for ${DS}/${ARC}/${BITS}-bit"
                     exit 1
@@ -157,13 +174,67 @@ if [ "${USE_CPP}" = "true" ] && [ "${EMBED_SENSITIVITY}" = "true" ]; then
     echo "[4-EmbeddingECC] Sensitivity export complete."
 fi
 
+# ---- Helper: run one ecc_embed invocation (C++ runner) ----
+# $1 = approach; remaining args are appended verbatim (e.g. top-K pattern flags)
+run_embed_cpp() {
+    local approach="$1"; shift
+    singularity exec \
+        --bind /blue \
+        "${CPP_SIF}" \
+        "${CPP_BINARY}" \
+            --dataset         "${DS}" \
+            --arch            "${ARC}" \
+            --quant-bits      "${BITS}" \
+            --t-value         "${T_VALUE}" \
+            --approach        "${approach}" \
+            --codeword        "${EMBED_CODEWORD}" \
+            --workers         "${EMBED_WORKERS}" \
+            --patterns-dir    "${PATTERNS_DIR}" \
+            --chunks-dir      "${EMBEDDED_ECC_CHUNKS_DIR}" \
+            --sensitivity-dir "${SENSITIVITY_DIR}" \
+            --parity-matrix   "${BCH_PARITY_FILE}" \
+            --qmode           "${QMODE}" \
+            ${SENS_FLAG} \
+            "$@"
+}
+
+# ---- Helper: run one ecc_embed invocation (Python runner) ----
+run_embed_py() {
+    local approach="$1"; shift
+    singularity exec \
+        --nv \
+        --bind /blue \
+        "${SIF}" \
+        python3 "${SCRIPT_DIR}/ecc_embed.py" \
+            --dataset       "${DS}" \
+            --arch          "${ARC}" \
+            --quant-bits    "${BITS}" \
+            --t-value       "${T_VALUE}" \
+            --approach      "${approach}" \
+            --codeword      "${EMBED_CODEWORD}" \
+            --workers       "${EMBED_WORKERS}" \
+            --patterns-dir  "${PATTERNS_DIR}" \
+            --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
+            --sensitivity-dir "${SENSITIVITY_DIR}" \
+            --qmode         "${QMODE}" \
+            ${SENS_FLAG} \
+            "$@"
+}
+
 # ---- Loop over all dataset × arch × quant-bits combinations ----
 for DS in $EMBED_DATASETS; do
     for ARC in $EMBED_ARCHS; do
         for BITS in $EMBED_QUANT_BITS; do
             DS_LOWER="${DS,,}"
             BIT_LABEL="${BITS}-bit"
-            MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/PTQ/${BIT_LABEL}/pattern_manifest.json"
+
+            # search3 uses the top-K pattern flow (top_patterns_manifest.json);
+            # all other approaches use the legacy single-pattern manifest.
+            if [ "${EMBED_APPROACH}" = "search3" ]; then
+                MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/top_patterns_manifest.json"
+            else
+                MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/pattern_manifest.json"
+            fi
 
             if [ ! -f "${MANIFEST}" ]; then
                 echo "[skip] No manifest: ${MANIFEST}"
@@ -171,48 +242,34 @@ for DS in $EMBED_DATASETS; do
             fi
 
             echo "========================================================"
-            echo "[4-EmbeddingECC] ${DS} / ${ARC} / ${BIT_LABEL} / t=${T_VALUE} ($([ "${USE_CPP}" = "true" ] && echo "C++" || echo "Python"))"
+            echo "[4-EmbeddingECC] ${DS} / ${ARC} / ${QMODE} / ${BIT_LABEL} / t=${T_VALUE} ($([ "${USE_CPP}" = "true" ] && echo "C++" || echo "Python"))"
             echo "========================================================"
+
+            TOPK_ARGS=(--top-patterns-dir "${PATTERNS_DIR}" --best-patterns-dir "${BEST_PATTERNS_DIR}")
 
             if [ "${USE_CPP}" = "true" ]; then
                 # ---- C++ runner ----
-                singularity exec \
-                    --bind /blue \
-                    "${CPP_SIF}" \
-                    "${CPP_BINARY}" \
-                        --dataset         "${DS}" \
-                        --arch            "${ARC}" \
-                        --quant-bits      "${BITS}" \
-                        --t-value         "${T_VALUE}" \
-                        --approach        "${EMBED_APPROACH}" \
-                        --codeword        "${EMBED_CODEWORD}" \
-                        --workers         "${EMBED_WORKERS}" \
-                        --patterns-dir    "${PATTERNS_DIR}" \
-                        --chunks-dir      "${EMBEDDED_ECC_CHUNKS_DIR}" \
-                        --sensitivity-dir "${SENSITIVITY_DIR}" \
-                        --parity-matrix   "${BCH_PARITY_FILE}" \
-                        ${SENS_FLAG}
+                if [ "${EMBED_APPROACH}" = "search3" ]; then
+                    echo "[4-EmbeddingECC] Phase 1/2: greedy selection across top-${TOP_PATTERNS} patterns"
+                    run_embed_cpp greedy "${TOPK_ARGS[@]}"
+                    echo "[4-EmbeddingECC] Phase 2/2: search3 with best pattern"
+                    run_embed_cpp search3 "${TOPK_ARGS[@]}"
+                else
+                    run_embed_cpp "${EMBED_APPROACH}"
+                fi
             else
                 # ---- Python runner ----
-                singularity exec \
-                    --nv \
-                    --bind /blue \
-                    "${SIF}" \
-                    python3 "${SCRIPT_DIR}/ecc_embed.py" \
-                        --dataset       "${DS}" \
-                        --arch          "${ARC}" \
-                        --quant-bits    "${BITS}" \
-                        --t-value       "${T_VALUE}" \
-                        --approach      "${EMBED_APPROACH}" \
-                        --codeword      "${EMBED_CODEWORD}" \
-                        --workers       "${EMBED_WORKERS}" \
-                        --patterns-dir  "${PATTERNS_DIR}" \
-                        --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
-                        --sensitivity-dir "${SENSITIVITY_DIR}" \
-                        ${SENS_FLAG}
+                if [ "${EMBED_APPROACH}" = "search3" ]; then
+                    echo "[4-EmbeddingECC] Phase 1/2: greedy selection across top-${TOP_PATTERNS} patterns"
+                    run_embed_py greedy "${TOPK_ARGS[@]}"
+                    echo "[4-EmbeddingECC] Phase 2/2: search3 with best pattern"
+                    run_embed_py search3 "${TOPK_ARGS[@]}"
+                else
+                    run_embed_py "${EMBED_APPROACH}"
+                fi
             fi
 
-            echo "[4-EmbeddingECC] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
+            echo "[4-EmbeddingECC] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done
     done
 done

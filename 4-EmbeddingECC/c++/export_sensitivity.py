@@ -6,16 +6,24 @@ For each layer in the pattern manifest, replicates the EXACT same sensitivity
 computation as ecc_embed.py's _load_layer_sensitivity():
 
   1. Read Taylor gradient scores from the sensitivity CSV:
-         {sensitivity_dir}/{ds}/{arch}/PTQ/{bits}-bit/
+         {sensitivity_dir}/{ds}/{arch}/{qmode}/{bits}-bit/
          layer_then_weight_{ds}_{arch}_int{n}_L999xN30000_grad_norm.csv
   2. Weights absent from the CSV get baseline = min(taylor scores in layer).
   3. Build array aligned to the weight permutation order (same as Python).
   4. Normalize to [0.5, 1.0]:  sens = 0.5 + 0.5 * (taylor / max_taylor)
-  5. Save as float32 → {patterns_dir}/{ds}/{arch}/PTQ/{bits}/{layer}_sens_py.npy
+  5. Save as float32 → {patterns_dir}/{ds}/{arch}/{qmode}/{bits}/{layer}_sens_py.npy
 
-C++ reads this file directly (no further permutation or normalization), so it
-uses the same continuous sensitivity values as Python — not the binary {0.5, 1.0}
-indicator values from _sens.npy.
+  Additionally exports a permutation-INDEPENDENT array, indexed by the
+  original (unpermuted) flat_idx and normalized the same way:
+         {patterns_dir}/{ds}/{arch}/{qmode}/{bits}/{layer}_sens_dense_py.npy
+  Since normalization divides by max(sens_dict.values()) — which does not
+  depend on the permutation — this single dense array can be re-permuted in
+  C++ for ANY candidate pattern's perm_file via sens_vec[k] = dense[perm[k]],
+  which is what the top-K greedy pattern scoring needs.
+
+C++ reads these files directly (no further permutation or normalization for
+_sens_py.npy), so it uses the same continuous sensitivity values as Python —
+not the binary {0.5, 1.0} indicator values from _sens.npy.
 
 This follows the same pattern as export_parity_matrix.py (BCH matrix export).
 Run once per (dataset, arch, quant-bits) combination; files are cached and
@@ -25,7 +33,8 @@ Usage:
   python3 export_sensitivity.py \\
       --dataset CIFAR10 --arch resnet18 --quant-bits 8 \\
       --patterns-dir  /blue/.../patterns \\
-      --sensitivity-dir /blue/.../sensitivity
+      --sensitivity-dir /blue/.../sensitivity \\
+      --qmode PTQ
 """
 import argparse
 import json
@@ -47,7 +56,7 @@ def _sanitize(name: str) -> str:
 
 def _load_layer_sensitivity(sensitivity_dir: str, ds_lower: str, arch: str,
                              quant_bits: int, layer_name: str,
-                             perm_arr) -> np.ndarray:
+                             perm_arr, qmode: str = "PTQ") -> np.ndarray:
     """
     Exact copy of ecc_embed.py's _load_layer_sensitivity().
 
@@ -56,7 +65,7 @@ def _load_layer_sensitivity(sensitivity_dir: str, ds_lower: str, arch: str,
     """
     bit_label = f"{quant_bits}-bit"
     csv_path = os.path.join(
-        sensitivity_dir, ds_lower, arch, "PTQ", bit_label,
+        sensitivity_dir, ds_lower, arch, qmode, bit_label,
         f"layer_then_weight_{ds_lower}_{arch}_int{quant_bits}_L999xN30000_grad_norm.csv",
     )
     if not os.path.exists(csv_path):
@@ -102,6 +111,8 @@ def main():
                     help="Root of 0-Data/artifacts/patterns/ (where _sens.npy files live)")
     ap.add_argument("--sensitivity-dir",  required=True,
                     help="Root of 0-Data/artifacts/sensitivity/ (where CSV files live)")
+    ap.add_argument("--qmode", default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ or QAT — selects the patterns/ and sensitivity/ subdirectory.")
     ap.add_argument("--force",            action="store_true",
                     help="Re-export even if _sens_py.npy already exists")
     args = ap.parse_args()
@@ -110,7 +121,7 @@ def main():
     bit_label = f"{args.quant_bits}-bit"
 
     manifest_path = os.path.join(
-        args.patterns_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.patterns_dir, ds_lower, args.arch, args.qmode, bit_label,
         "pattern_manifest.json",
     )
     if not os.path.exists(manifest_path):
@@ -120,14 +131,14 @@ def main():
     with open(manifest_path) as fh:
         manifest = json.load(fh)
 
-    print(f"[export_sensitivity] {args.dataset}/{args.arch}/{bit_label}")
+    print(f"[export_sensitivity] {args.dataset}/{args.arch}/{args.qmode}/{bit_label}")
     print(f"[export_sensitivity] manifest: {manifest_path}  ({len(manifest)} layers)")
     print(f"[export_sensitivity] patterns-dir:     {args.patterns_dir}")
     print(f"[export_sensitivity] sensitivity-dir:  {args.sensitivity_dir}")
 
     # Load the CSV once (it covers all layers), cache it for speed
     csv_path = os.path.join(
-        args.sensitivity_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.sensitivity_dir, ds_lower, args.arch, args.qmode, bit_label,
         f"layer_then_weight_{ds_lower}_{args.arch}_int{args.quant_bits}_L999xN30000_grad_norm.csv",
     )
     if not os.path.exists(csv_path):
@@ -142,6 +153,7 @@ def main():
 
     for layer_name, entry in manifest.items():
         perm_file = entry.get("perm_file")
+        N_entry   = entry.get("N")
         if not perm_file or not os.path.exists(perm_file):
             print(f"  [skip] {layer_name}: perm_file missing ({perm_file})")
             n_skipped += 1
@@ -149,17 +161,21 @@ def main():
 
         layer_safe = _sanitize(layer_name)
         out_path = os.path.join(
-            args.patterns_dir, ds_lower, args.arch, "PTQ", bit_label,
+            args.patterns_dir, ds_lower, args.arch, args.qmode, bit_label,
             f"{layer_safe}_sens_py.npy",
         )
+        dense_out_path = os.path.join(
+            args.patterns_dir, ds_lower, args.arch, args.qmode, bit_label,
+            f"{layer_safe}_sens_dense_py.npy",
+        )
 
-        if os.path.exists(out_path) and not args.force:
+        if os.path.exists(out_path) and os.path.exists(dense_out_path) and not args.force:
             n_skipped += 1
-            continue  # already exported, reuse cached file
+            continue  # already exported, reuse cached files
 
         try:
             perm_arr = np.load(perm_file)
-            N = len(perm_arr)
+            N = N_entry if N_entry is not None else len(perm_arr)
 
             # Per-layer sensitivity dict from pre-loaded CSV
             layer_df  = df_all[df_all["layer"] == layer_name][["flat_idx", "taylor"]]
@@ -168,16 +184,20 @@ def main():
 
             baseline = min(sens_dict.values()) if sens_dict else 0.0
 
-            sens_arr = np.array(
-                [sens_dict.get(int(perm_arr[i]), baseline) for i in range(N)],
+            # ---- Dense array, indexed by ORIGINAL flat_idx (permutation-independent) ----
+            dense_arr = np.array(
+                [sens_dict.get(i, baseline) for i in range(N)],
                 dtype=np.float64,
             )
-
-            max_val = float(sens_arr.max())
+            max_val = float(dense_arr.max())
             if max_val > 0.0:
-                sens_arr = 0.5 + 0.5 * (sens_arr / max_val)
+                dense_arr = 0.5 + 0.5 * (dense_arr / max_val)
             else:
-                sens_arr[:] = 1.0
+                dense_arr[:] = 1.0
+            np.save(dense_out_path, dense_arr.astype(np.float32))
+
+            # ---- Rank-0 permuted array (backward compat, _sens_py.npy) ----
+            sens_arr = dense_arr[perm_arr]
 
             # Save as float32 — C++ reads float32 .npy files
             np.save(out_path, sens_arr.astype(np.float32))
@@ -185,7 +205,7 @@ def main():
             print(f"  [ok] {layer_name}: N={N:,}  "
                   f"in_CSV={len(sens_dict)}  "
                   f"range=[{sens_arr.min():.4f}, {sens_arr.max():.4f}]  "
-                  f"→ {os.path.basename(out_path)}")
+                  f"→ {os.path.basename(out_path)}, {os.path.basename(dense_out_path)}")
             n_ok += 1
 
         except Exception as exc:

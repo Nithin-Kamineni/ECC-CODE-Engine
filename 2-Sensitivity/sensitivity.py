@@ -619,6 +619,11 @@ def main():
     p.add_argument("--quantize-bits", nargs="*", type=int, default=[],
                    help="Also run sensitivity on quantized versions. "
                         "e.g. --quantize-bits 8 4")
+    p.add_argument("--qat-bits", type=int, default=0,
+                   help="--weights points at an already-quantized QAT checkpoint "
+                        "(fake-quant intN stored as float32). Tag output as intN "
+                        "and skip the float32 baseline / quantize_model_inplace. "
+                        "0 = disabled.")
     p.add_argument("--quant-error", action="store_true",
                    help="Add per-weight |w_float - w_dequant| as a column.")
 
@@ -695,31 +700,43 @@ def main():
 
     base_tag = f"{args.dataset.lower()}_{args.arch.lower()}"
 
-    # =====================================================
-    # 1) FLOAT32 run
-    # =====================================================
-    model = fresh_model()
-    run_one_version(model, test_loader, device,
-                    methods=args.methods, max_batches=args.max_batches,
-                    out_dir=args.out_dir, tag=f"{base_tag}_float32",
-                    extra_per_weight=None, dump_args=dump_args)
-
-    # =====================================================
-    # 2) Quantized runs (if requested)
-    # =====================================================
-    for nbits in args.quantize_bits:
-        print(f"\n[Quantize] producing INT{nbits} version ...")
-        m_q = fresh_model()
-        qerr = quantize_model_inplace(m_q, num_bits=nbits)
-        # only keep error tensors for the params we'll score
-        qerr_filtered = {n: {f"quant_err_int{nbits}": qerr[n]}
-                         for n, _ in _iter_weight_params(m_q) if n in qerr}
-        extra = qerr_filtered if args.quant_error else None
-        run_one_version(m_q, test_loader, device,
+    if args.qat_bits:
+        # =====================================================
+        # --weights points at an already-quantized QAT checkpoint
+        # (fake-quant intN stored as float32). Tag output as intN;
+        # do not re-quantize.
+        # =====================================================
+        model = fresh_model()
+        run_one_version(model, test_loader, device,
                         methods=args.methods, max_batches=args.max_batches,
-                        out_dir=args.out_dir,
-                        tag=f"{base_tag}_int{nbits}",
-                        extra_per_weight=extra, dump_args=dump_args)
+                        out_dir=args.out_dir, tag=f"{base_tag}_int{args.qat_bits}",
+                        extra_per_weight=None, dump_args=dump_args)
+    else:
+        # =====================================================
+        # 1) FLOAT32 run
+        # =====================================================
+        model = fresh_model()
+        run_one_version(model, test_loader, device,
+                        methods=args.methods, max_batches=args.max_batches,
+                        out_dir=args.out_dir, tag=f"{base_tag}_float32",
+                        extra_per_weight=None, dump_args=dump_args)
+
+        # =====================================================
+        # 2) Quantized runs (if requested)
+        # =====================================================
+        for nbits in args.quantize_bits:
+            print(f"\n[Quantize] producing INT{nbits} version ...")
+            m_q = fresh_model()
+            qerr = quantize_model_inplace(m_q, num_bits=nbits)
+            # only keep error tensors for the params we'll score
+            qerr_filtered = {n: {f"quant_err_int{nbits}": qerr[n]}
+                             for n, _ in _iter_weight_params(m_q) if n in qerr}
+            extra = qerr_filtered if args.quant_error else None
+            run_one_version(m_q, test_loader, device,
+                            methods=args.methods, max_batches=args.max_batches,
+                            out_dir=args.out_dir,
+                            tag=f"{base_tag}_int{nbits}",
+                            extra_per_weight=extra, dump_args=dump_args)
 
 
 if __name__ == "__main__":

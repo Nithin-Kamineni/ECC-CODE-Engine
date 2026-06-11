@@ -414,14 +414,17 @@ def run_one_arch(arch: str, args):
     out_dir  = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    formats = ["float32"] + [f"int{b}" for b in args.quantize_bits]
+    if args.qat_bits:
+        formats = [f"int{args.qat_bits}"]
+    else:
+        formats = ["float32"] + [f"int{b}" for b in args.quantize_bits]
 
     for fmt in formats:
         print(f"\n=== [{arch}] format={fmt} ===")
         m = fresh_model(arch, args.dataset, nc,
                         args.use_pretrained, args.weights, device)
         extra = None
-        if fmt.startswith("int"):
+        if fmt.startswith("int") and not args.qat_bits:
             nbits = int(fmt[3:])
             qerr = quantize_model_inplace(m, num_bits=nbits)
             # turn into per-weight extra column
@@ -500,6 +503,10 @@ def main():
 
     p.add_argument("--quantize-bits", nargs="*", type=int, default=[],
                    help="Also run on quantized formats, e.g. --quantize-bits 8 4")
+    p.add_argument("--qat-bits", type=int, default=0,
+                   help="--weights points at an already-quantized QAT checkpoint "
+                        "(fake-quant intN stored as float32). Tag all output as "
+                        "intN and skip quantize_model_inplace. 0 = disabled.")
 
     p.add_argument("--out-dir", default="artifacts/sensitivity")
     args = p.parse_args()

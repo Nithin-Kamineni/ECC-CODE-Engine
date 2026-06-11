@@ -77,6 +77,13 @@ QAT_SKIP_FIRST_LAST="${QAT_SKIP_FIRST_LAST:-0}"  # 1 = leave first Conv2d + last
 # in their original order (identity permutation) for every layer.
 DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 
+# ---- Top-K stride patterns saved per layer by 3-PatternFinder ----
+# 4-EmbeddingECC scores all K candidates (greedy distortion) and picks the best.
+# When DISABLE_PATTERN_FIND=true, only 1 (identity) pattern is saved regardless.
+TOP_PATTERNS="${TOP_PATTERNS:-10}"
+# ---- Where per-layer best-pattern selections (from greedy scoring) are saved ----
+BEST_PATTERNS_DIR="${BEST_PATTERNS_DIR:-${ARTIFACTS_DIR}/best_patterns}"
+
 # ---- EmbeddingECC — separate control lists (independent of 1-3 pipeline vars) ----
 
 EMBED_SKIP_PROCESS="${EMBED_SKIP_PROCESS:-false}" # set to true to skip the embedding process
@@ -88,17 +95,17 @@ EMBED_SENSITIVITY="${EMBED_SENSITIVITY:-true}"  # true = use sensitivity weights
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
 # EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
 EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
-# EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
-EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8}"   # quantized levels only (not float32)
+EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
+# EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8}"   # quantized levels only (not float32)
 EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
 EMBED_CODEWORD="${EMBED_CODEWORD:-63}"         # M value in M{codeword}_t{tval} path
-EMBED_WORKERS="${EMBED_WORKERS:-16}"
+EMBED_WORKERS="${EMBED_WORKERS:-8}"
 EMBEDDED_ECC_DIR="${EMBEDDED_ECC_DIR:-${ARTIFACTS_DIR}/embeddedECC}"
 EMBEDDED_ECC_CHUNKS_DIR="${EMBEDDED_ECC_CHUNKS_DIR:-${ARTIFACTS_DIR}/embeddedECC_Chunks}"
 
 # ---- Ensure output directories exist ----
 mkdir -p "${MODELS_DIR}" "${SENSITIVITY_DIR}" "${PATTERNS_DIR}" \
-         "${EMBEDDED_ECC_DIR}" "${EMBEDDED_ECC_CHUNKS_DIR}"
+         "${EMBEDDED_ECC_DIR}" "${EMBEDDED_ECC_CHUNKS_DIR}" "${BEST_PATTERNS_DIR}"
 
 export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        MODELS_DIR SENSITIVITY_DIR PATTERNS_DIR IMAGENET_ROOT \
@@ -106,7 +113,7 @@ export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        TOP_LAYERS TOP_PER_LAYER LAYER_METRIC MAX_BATCHES \
        GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD MAX_STRIDE SKIP_TRAIN \
        QAT_ENABLED QAT_EPOCHS QAT_LR QAT_SKIP_FIRST_LAST \
-       DISABLE_PATTERN_FIND \
+       DISABLE_PATTERN_FIND TOP_PATTERNS BEST_PATTERNS_DIR \
        EMBED_DATASETS EMBED_ARCHS EMBED_QUANT_BITS EMBED_APPROACH \
        EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR \
        EMBED_RUN_CPP EMBED_SENSITIVITY EMBED_SKIP_PROCESS

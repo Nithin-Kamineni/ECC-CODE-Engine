@@ -99,7 +99,7 @@ for DS in $DATASETS; do
             elif [ "${QAT_ENABLED}" = "true" ]; then
                 LABEL="${BITS}-bit"
                 QAT_CKPT="${MODELS_DIR}/${DS_LOWER}/${ARC}/QAT/model_int${BITS}_qat.pth"
-                QBITS_FLAG=""
+                QBITS_FLAG="--qat-bits ${BITS}"
                 WEIGHTS_FLAG="--weights ${QAT_CKPT}"
             else
                 LABEL="${BITS}-bit"

@@ -11,8 +11,15 @@
 #   4-EmbeddingECC, fills any gaps by re-encoding missing ranges, applies
 #   inv_perm to restore original weight ordering, and saves:
 #
-#     embeddedECC/{ds}/{arch}/PTQ/{bit}/M{codeword}_t{tval}/{approach}/
+#     embeddedECC/{ds}/{arch}/{PTQ,QAT}/{bit}/M{codeword}_t{tval}/{approach}/
 #         ECC_Embedded_model.pth
+#
+#   PTQ vs QAT (QMODE) is selected by QAT_ENABLED, mirroring 2/3/4.
+#
+#   For EMBED_APPROACH=search3, each layer's pattern is resolved via
+#   top_patterns_manifest.json + best_pattern_selection.json (top-K greedy
+#   selection from 4-EmbeddingECC) instead of pattern_manifest.json's rank-0
+#   pattern.
 #
 # Run AFTER 4-EmbeddingECC has finished (all array tasks complete).
 #
@@ -52,12 +59,17 @@ T_VALUE="${SLURM_ARRAY_TASK_ID}"
 # ---- Path to 4-EmbeddingECC for ECC tool imports ----
 ECC_SOURCE="${SCRIPT_DIR}/../4-EmbeddingECC"
 
+# ---- PTQ vs QAT (mirrors 2-Sensitivity/run.sh, 3-PatternFinder/run.sh, 4-EmbeddingECC/run.sh) ----
+QMODE="$( [ "${QAT_ENABLED}" = "true" ] && echo QAT || echo PTQ )"
+
 echo "[5-EmbeddingsMerging/run.sh] SIF=${SIF}"
 echo "[5-EmbeddingsMerging/run.sh] T_VALUE=${T_VALUE}  (SLURM array task)"
 echo "[5-EmbeddingsMerging/run.sh] EMBED_DATASETS=${EMBED_DATASETS}"
 echo "[5-EmbeddingsMerging/run.sh] EMBED_ARCHS=${EMBED_ARCHS}"
 echo "[5-EmbeddingsMerging/run.sh] EMBED_QUANT_BITS=${EMBED_QUANT_BITS}"
 echo "[5-EmbeddingsMerging/run.sh] EMBED_APPROACH=${EMBED_APPROACH}  EMBED_CODEWORD=${EMBED_CODEWORD}"
+echo "[5-EmbeddingsMerging/run.sh] QAT_ENABLED=${QAT_ENABLED}  QMODE=${QMODE}"
+echo "[5-EmbeddingsMerging/run.sh] BEST_PATTERNS_DIR=${BEST_PATTERNS_DIR}"
 echo "[5-EmbeddingsMerging/run.sh] EMBEDDED_ECC_DIR=${EMBEDDED_ECC_DIR}"
 echo "[5-EmbeddingsMerging/run.sh] EMBEDDED_ECC_CHUNKS_DIR=${EMBEDDED_ECC_CHUNKS_DIR}"
 
@@ -67,7 +79,14 @@ for DS in $EMBED_DATASETS; do
         for BITS in $EMBED_QUANT_BITS; do
             DS_LOWER="${DS,,}"
             BIT_LABEL="${BITS}-bit"
-            MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/PTQ/${BIT_LABEL}/pattern_manifest.json"
+
+            # search3 resolves each layer's pattern via top_patterns_manifest.json +
+            # best_pattern_selection.json; other approaches use pattern_manifest.json.
+            if [ "${EMBED_APPROACH}" = "search3" ]; then
+                MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/top_patterns_manifest.json"
+            else
+                MANIFEST="${PATTERNS_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/pattern_manifest.json"
+            fi
 
             if [ ! -f "${MANIFEST}" ]; then
                 echo "[skip] No manifest: ${MANIFEST}"
@@ -75,7 +94,7 @@ for DS in $EMBED_DATASETS; do
             fi
 
             echo "========================================================"
-            echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE}"
+            echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE}"
             echo "========================================================"
 
             singularity exec \
@@ -93,9 +112,12 @@ for DS in $EMBED_DATASETS; do
                     --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
                     --ecc-dir       "${EMBEDDED_ECC_DIR}" \
                     --models-dir    "${MODELS_DIR}" \
-                    --ecc-source    "${ECC_SOURCE}"
+                    --ecc-source    "${ECC_SOURCE}" \
+                    --qmode         "${QMODE}" \
+                    --top-patterns-dir  "${PATTERNS_DIR}" \
+                    --best-patterns-dir "${BEST_PATTERNS_DIR}"
 
-            echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
+            echo "[5-EmbeddingsMerging] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done
     done
 done
