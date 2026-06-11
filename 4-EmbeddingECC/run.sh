@@ -128,6 +128,35 @@ else
     echo "[4-EmbeddingECC] EMBED_SENSITIVITY=true → using sensitivity weights"
 fi
 
+# ---- If using C++ with sensitivity enabled, export Python sensitivity arrays ----
+# Produces <layer>_sens_py.npy files (continuous Taylor scores, normalized to [0.5,1.0])
+# so C++ uses the same values as Python instead of the binary {0.5,1.0} from _sens.npy.
+# Files are cached — only re-exported if missing (or delete them to force re-export).
+if [ "${USE_CPP}" = "true" ] && [ "${EMBED_SENSITIVITY}" = "true" ]; then
+    echo "[4-EmbeddingECC] Exporting Python sensitivity arrays for C++ ..."
+    for DS in $EMBED_DATASETS; do
+        for ARC in $EMBED_ARCHS; do
+            for BITS in $EMBED_QUANT_BITS; do
+                singularity exec \
+                    --nv \
+                    --bind /blue \
+                    "${SIF}" \
+                    python3 "${CPP_DIR}/export_sensitivity.py" \
+                        --dataset         "${DS}" \
+                        --arch            "${ARC}" \
+                        --quant-bits      "${BITS}" \
+                        --patterns-dir    "${PATTERNS_DIR}" \
+                        --sensitivity-dir "${SENSITIVITY_DIR}"
+                if [ $? -ne 0 ]; then
+                    echo "[4-EmbeddingECC] ERROR: export_sensitivity.py failed for ${DS}/${ARC}/${BITS}-bit"
+                    exit 1
+                fi
+            done
+        done
+    done
+    echo "[4-EmbeddingECC] Sensitivity export complete."
+fi
+
 # ---- Loop over all dataset × arch × quant-bits combinations ----
 for DS in $EMBED_DATASETS; do
     for ARC in $EMBED_ARCHS; do

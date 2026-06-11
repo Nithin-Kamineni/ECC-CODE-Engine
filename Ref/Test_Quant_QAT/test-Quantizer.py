@@ -2,10 +2,6 @@
 # University of Florida
 # ECE Department
 
-# Developed By Habibur Rahaman
-# University of Florida
-# ECE Department
-
 
 from __future__ import annotations
 import os, math, time, argparse, random, urllib.request, urllib.error, tarfile, hashlib, shutil, subprocess, sys
@@ -25,8 +21,6 @@ from torchvision import datasets, transforms, models
 
 IMNET_MEAN = [0.485, 0.456, 0.406]
 IMNET_STD  = [0.229, 0.224, 0.225]
-
-ARTIFACTS_ROOT = "artifacts"
 
 
 def now_str() -> str:
@@ -411,6 +405,7 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
         "resnet34":      getattr(models, "ResNet34_Weights",      None).IMAGENET1K_V1 if hasattr(models, "ResNet34_Weights") else None,
         "resnet50":      getattr(models, "ResNet50_Weights",      None).IMAGENET1K_V1 if hasattr(models, "ResNet50_Weights") else None,
         "resnet101":     getattr(models, "ResNet101_Weights",     None).IMAGENET1K_V1 if hasattr(models, "ResNet101_Weights") else None,
+        "resnet152":     getattr(models, "ResNet152_Weights",     None).IMAGENET1K_V1 if hasattr(models, "ResNet152_Weights") else None,
         "vgg16":         getattr(models, "VGG16_Weights",         None).IMAGENET1K_V1 if hasattr(models, "VGG16_Weights") else None,
         "alexnet":       getattr(models, "AlexNet_Weights",       None).IMAGENET1K_V1 if hasattr(models, "AlexNet_Weights") else None,
         "mobilenet_v2":  getattr(models, "MobileNet_V2_Weights",  None).IMAGENET1K_V1 if hasattr(models, "MobileNet_V2_Weights") else None,
@@ -419,12 +414,28 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
         "efficientnet_b2": getattr(models, "EfficientNet_B2_Weights", None).IMAGENET1K_V1 if hasattr(models, "EfficientNet_B2_Weights") else None,
         "efficientnet_b3": getattr(models, "EfficientNet_B3_Weights", None).IMAGENET1K_V1 if hasattr(models, "EfficientNet_B3_Weights") else None,
         "efficientnet_b4": getattr(models, "EfficientNet_B4_Weights", None).IMAGENET1K_V1 if hasattr(models, "EfficientNet_B4_Weights") else None,
+        "convnext_tiny":   getattr(models, "ConvNeXt_Tiny_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Tiny_Weights") else None,
+        "convnext_small":  getattr(models, "ConvNeXt_Small_Weights",  None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Small_Weights") else None,
         "convnext_base":   getattr(models, "ConvNeXt_Base_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Base_Weights") else None,
         "convnext_large":  getattr(models, "ConvNeXt_Large_Weights",  None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Large_Weights") else None,
+        "densenet121":     getattr(models, "DenseNet121_Weights",     None).IMAGENET1K_V1 if hasattr(models, "DenseNet121_Weights") else None,
+        "densenet169":     getattr(models, "DenseNet169_Weights",     None).IMAGENET1K_V1 if hasattr(models, "DenseNet169_Weights") else None,
+        "squeezenet1_0":   getattr(models, "SqueezeNet1_0_Weights",   None).IMAGENET1K_V1 if hasattr(models, "SqueezeNet1_0_Weights") else None,
+        "squeezenet1_1":   getattr(models, "SqueezeNet1_1_Weights",   None).IMAGENET1K_V1 if hasattr(models, "SqueezeNet1_1_Weights") else None,
     }
 
     if a == "mlp":
         return CIFARMLP(num_classes)
+
+    # Xception is not in torchvision; load via timm.
+    if a == "xception":
+        try:
+            import timm
+        except ImportError:
+            raise ImportError("Xception requires timm: pip install timm")
+        m = timm.create_model("xception", pretrained=bool(use_pretrained),
+                              num_classes=num_classes)
+        return m
 
     ctor = getattr(models, a, None)
     if ctor is None:
@@ -447,6 +458,14 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
         elif isinstance(m.classifier, nn.Linear):
             if m.classifier.out_features != num_classes:
                 m.classifier = nn.Linear(m.classifier.in_features, num_classes)
+        elif isinstance(m.classifier, nn.Conv2d):
+            # SqueezeNet uses a final Conv2d as the classifier.
+            if m.classifier.out_channels != num_classes:
+                m.classifier = nn.Conv2d(
+                    m.classifier.in_channels, num_classes,
+                    kernel_size=m.classifier.kernel_size,
+                    stride=m.classifier.stride,
+                )
 
     return m
 
@@ -622,12 +641,7 @@ def load_quantized_into_model(model, dataset, arch, num_bits, qtag, map_location
 # =========================================================
 
 def ckpt_path(dataset, arch, tag):
-    base = f"{ARTIFACTS_ROOT}/models/{dataset.lower()}/{arch.lower()}"
-    if tag.endswith("_ptq"):   # int16_ptq, int8_ptq, int4_ptq → PTQ/ subdirectory
-        return f"{base}/PTQ/model_{tag}.pth"
-    if tag.endswith("_qat"):   # int16_qat, int8_qat, int4_qat → QAT/ subdirectory
-        return f"{base}/QAT/model_{tag}.pth"
-    return f"{base}/model_{tag}.pth"
+    return f"artifacts/models/{dataset.lower()}/{arch.lower()}/model_{tag}.pth"
 
 
 def save_float_checkpoint(model, dataset, arch, tag, extra=None):
@@ -898,8 +912,6 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p.add_argument("--data-root", default="./data")
-    p.add_argument("--artifacts-root", default="artifacts",
-                   help="Root directory for model checkpoints (models/) and other artifacts")
     p.add_argument("--imagenet-root", default="")
     p.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--workers", type=int, default=2)
@@ -962,11 +974,9 @@ def ddp_cleanup_if_needed(args):
 
 
 def main():
-    global ARTIFACTS_ROOT
     p = build_parser()
     args = p.parse_args()
     args.dataset = args.dataset.upper()
-    ARTIFACTS_ROOT = args.artifacts_root
 
     ddp_init_if_needed(args)
     try:

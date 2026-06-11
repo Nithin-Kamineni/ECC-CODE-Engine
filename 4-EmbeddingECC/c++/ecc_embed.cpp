@@ -184,23 +184,56 @@ static void process_layer(
     std::vector<float>  sens_vec;
     const float*        sens_ptr = nullptr;
     if (approach != Approach::NO && !args.no_sensitivity) {
-        // Try to load sens.npy from patterns dir
         std::string layer_safe = sanitize(layer_name);
-        std::string sens_path  = args.patterns_dir + "/" + ds_lower(args.dataset) + "/" +
-                                 args.arch + "/PTQ/" + bit_label + "/" + layer_safe + "_sens.npy";
-        // Also load perm file if available (to map sensitivity to permuted order)
-        std::string perm_path;
-        if (entry.contains("perm_file") && !entry["perm_file"].is_null())
-            perm_path = entry["perm_file"].get<std::string>();
+        std::string base_path  = args.patterns_dir + "/" + ds_lower(args.dataset) + "/" +
+                                 args.arch + "/PTQ/" + bit_label + "/" + layer_safe;
 
-        std::vector<int64_t> perm_vec;
-        if (!perm_path.empty() && fs::exists(perm_path)) {
-            try { perm_vec = npy_load_int64(perm_path); } catch (...) {}
+        // ── Priority 1: _sens_py.npy (exported by export_sensitivity.py) ────────
+        // Already permuted and normalized to [0.5, 1.0] by Python's
+        // _load_layer_sensitivity() — uses continuous Taylor scores, exact match
+        // with the Python runner.  Load directly with no further processing.
+        std::string sens_py_path = base_path + "_sens_py.npy";
+        if (fs::exists(sens_py_path)) {
+            try {
+                sens_vec = npy_load_float32(sens_py_path);
+                float s_min = *std::min_element(sens_vec.begin(), sens_vec.end());
+                float s_max = *std::max_element(sens_vec.begin(), sens_vec.end());
+                fprintf(stdout,
+                    "  [sens] %s: Python sensitivity (%zu values, range=[%.4f, %.4f])\n",
+                    layer_name.c_str(), sens_vec.size(), s_min, s_max);
+                fflush(stdout);
+            } catch (...) {
+                sens_vec.clear();
+            }
         }
 
-        sens_vec = load_sensitivity(sens_path, perm_vec.empty() ? nullptr : &perm_vec);
+        // ── Priority 2: _sens.npy fallback (indicator {0,1} + perm + normalize) ─
+        // Uses binary indicators from prepare_patterns.py — results in {0.5, 1.0}
+        // after normalization (not continuous).  Used when export_sensitivity.py
+        // has not been run yet.
+        if (sens_vec.empty()) {
+            std::string sens_path = base_path + "_sens.npy";
+            std::string perm_path;
+            if (entry.contains("perm_file") && !entry["perm_file"].is_null())
+                perm_path = entry["perm_file"].get<std::string>();
+
+            std::vector<int64_t> perm_vec;
+            if (!perm_path.empty() && fs::exists(perm_path)) {
+                try { perm_vec = npy_load_int64(perm_path); } catch (...) {}
+            }
+
+            sens_vec = load_sensitivity(sens_path, perm_vec.empty() ? nullptr : &perm_vec);
+            if (!sens_vec.empty()) {
+                fprintf(stdout,
+                    "  [sens] %s: WARNING — _sens_py.npy not found; using indicator "
+                    "_sens.npy (binary {0.5,1.0}).  Run export_sensitivity.py for "
+                    "exact Python match.\n", layer_name.c_str());
+                fflush(stdout);
+            }
+        }
+
         if (!sens_vec.empty()) {
-            if (sens_vec.size() < N) sens_vec.resize(N, 0.0f);
+            if (sens_vec.size() < N) sens_vec.resize(N, 0.5f);  // pad with baseline
             sens_ptr = sens_vec.data();
         }
     } else if (args.no_sensitivity) {

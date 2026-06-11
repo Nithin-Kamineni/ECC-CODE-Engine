@@ -40,11 +40,11 @@ ARCHS="${ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
 # ---- Default runtime parameters ----
 BATCH_SIZE="${BATCH_SIZE:-128}"
 DEVICE="${DEVICE:-cuda}"
-QUANTIZE_BITS="${QUANTIZE_BITS:-16 8 4}"
+QUANTIZE_BITS="${QUANTIZE_BITS:-8 4}"
 # QUANT_LEVELS — full sweep used in 2-Sensitivity and 3-PatternFinder loops.
 # 32 = float32 baseline (no quantization); 16/8/4 = PTQ levels.
 # Scripts map 32 → float32 label internally. Modify freely.
-QUANT_LEVELS="${QUANT_LEVELS:-32 16 8 4}"
+QUANT_LEVELS="${QUANT_LEVELS:-8 4}"
 TOP_LAYERS="${TOP_LAYERS:-999}"
 TOP_PER_LAYER="${TOP_PER_LAYER:-30000}"
 LAYER_METRIC="${LAYER_METRIC:-grad_norm}"
@@ -67,6 +67,11 @@ MAX_STRIDE="${MAX_STRIDE:-256}"
 # when model_float32.pth already exists for a given dataset/arch pair.
 SKIP_TRAIN="${SKIP_TRAIN:-false}"
 
+QAT_ENABLED="${QAT_ENABLED:-true}" # set to true to enable Quantization-Aware Training (QAT) instead of Post-Training Quantization (PTQ)
+QAT_EPOCHS="${QAT_EPOCHS:-30}"           # QAT fine-tuning epochs (much less than full training)
+QAT_LR="${QAT_LR:-1e-3}"                # smaller LR for QAT fine-tuning
+QAT_SKIP_FIRST_LAST="${QAT_SKIP_FIRST_LAST:-0}"  # 1 = leave first Conv2d + last Linear at float32 (helps INT4 robustness)
+
 # ---- Disable pattern search (identity permutation only) ----
 # Set DISABLE_PATTERN_FIND=true to skip the interleaver search and save weights
 # in their original order (identity permutation) for every layer.
@@ -77,7 +82,7 @@ DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 EMBED_SKIP_PROCESS="${EMBED_SKIP_PROCESS:-false}" # set to true to skip the embedding process
 
 EMBED_RUN_CPP="${EMBED_RUN_CPP:-true}" # set to true to run the C++ embedding code (requires separate compile step)
-EMBED_SENSITIVITY="${EMBED_SENSITIVITY:-false}"  # true = use sensitivity weights; false = all weights = 1.0 (uniform, disables loading)
+EMBED_SENSITIVITY="${EMBED_SENSITIVITY:-true}"  # true = use sensitivity weights; false = all weights = 1.0 (uniform, disables loading)
 # Modify these to subset the combinations you actually want to embed.
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
@@ -100,6 +105,7 @@ export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        DATASETS ARCHS BATCH_SIZE DEVICE QUANTIZE_BITS QUANT_LEVELS \
        TOP_LAYERS TOP_PER_LAYER LAYER_METRIC MAX_BATCHES \
        GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD MAX_STRIDE SKIP_TRAIN \
+       QAT_ENABLED QAT_EPOCHS QAT_LR QAT_SKIP_FIRST_LAST \
        DISABLE_PATTERN_FIND \
        EMBED_DATASETS EMBED_ARCHS EMBED_QUANT_BITS EMBED_APPROACH \
        EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR \

@@ -27,7 +27,7 @@
 #   QUANTIZE_BITS="8"               # quantize to 8-bit only
 # =============================================================================
 
-#SBATCH --job-name=ecc-quantize
+#SBATCH --job-name=1-ecc-quantize
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -61,6 +61,7 @@ echo "[1-Quantization/run.sh] ARCHS=${ARCHS}"
 echo "[1-Quantization/run.sh] ARTIFACTS_DIR=${ARTIFACTS_DIR}"
 echo "[1-Quantization/run.sh] QUANTIZE_BITS=${QUANTIZE_BITS}"
 echo "[1-Quantization/run.sh] SKIP_TRAIN=${SKIP_TRAIN}"
+echo "[1-Quantization/run.sh] QAT_ENABLED=${QAT_ENABLED}"
 
 # =============================================================================
 # Pass 1 — Train each arch on each trainable dataset (CIFAR10, CIFAR100)
@@ -98,46 +99,79 @@ for DS in $DATASETS; do
 done
 
 # =============================================================================
-# Pass 2 — Quantize every (dataset, arch) pair to each bit-width
+# Pass 2 — PTQ: Quantize every (dataset, arch) pair to each bit-width
+#           Runs when QAT_ENABLED=false (default).
 #           CIFAR: loads model_float32.pth trained above
 #           ImageNet: pulls pretrained torchvision weights, saves float32 + quantized
+#
+# Pass 3 — QAT: Fine-tune with fake-quantization for every (dataset, arch, bits).
+#           Runs when QAT_ENABLED=true.
+#           Outputs: 0-Data/artifacts/models/{dataset}/{arch}/QAT/model_int{N}_qat.pth
 # =============================================================================
 echo ""
-echo "=== Pass 2: Quantization ==="
-for DS in $DATASETS; do
-    for ARC in $ARCHS; do
-        for BITS in $QUANTIZE_BITS; do
-            echo "[1-Quantization] Quantizing ${ARC} on ${DS} @ ${BITS}-bit ..."
-            if [ "$DS" = "IMAGENET" ]; then
+if [ "${QAT_ENABLED}" = "true" ]; then
+    echo "=== Pass 3: QAT (QAT_ENABLED=true) ==="
+    echo "[1-Quantization/run.sh] QAT_EPOCHS=${QAT_EPOCHS}  QAT_LR=${QAT_LR}  QAT_SKIP_FIRST_LAST=${QAT_SKIP_FIRST_LAST}"
+    for DS in $DATASETS; do
+        for ARC in $ARCHS; do
+            for BITS in $QUANTIZE_BITS; do
+                echo "[1-Quantization] QAT fine-tuning ${ARC} on ${DS} @ ${BITS}-bit ..."
                 singularity exec \
                     --nv \
                     --bind /blue \
                     "${SIF}" \
-                    python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                    python3 "${SCRIPT_DIR}/qat_train.py" \
                         --data-root       "${DATASET_DIR}" \
                         --artifacts-root  "${ARTIFACTS_DIR}" \
                         --imagenet-root   "${IMAGENET_ROOT}" \
-                        --use-pretrained  1 \
-                        quantize \
+                        --use-pretrained  "$([ "$DS" = "IMAGENET" ] && echo 1 || echo 0)" \
                         --dataset         "${DS}" \
                         --arch            "${ARC}" \
-                        --bits            "${BITS}"
-            else
-                singularity exec \
-                    --nv \
-                    --bind /blue \
-                    "${SIF}" \
-                    python3 "${SCRIPT_DIR}/test-Quantizer.py" \
-                        --data-root       "${DATASET_DIR}" \
-                        --artifacts-root  "${ARTIFACTS_DIR}" \
-                        quantize \
-                        --dataset         "${DS}" \
-                        --arch            "${ARC}" \
-                        --bits            "${BITS}"
-            fi
+                        --bits            "${BITS}" \
+                        --epochs          "${QAT_EPOCHS}" \
+                        --lr              "${QAT_LR}" \
+                        --skip-first-last "${QAT_SKIP_FIRST_LAST}" \
+                        --batch-size      "${BATCH_SIZE}"
+            done
         done
     done
-done
+else
+    echo "=== Pass 2: PTQ (QAT_ENABLED=false) ==="
+    for DS in $DATASETS; do
+        for ARC in $ARCHS; do
+            for BITS in $QUANTIZE_BITS; do
+                echo "[1-Quantization] Quantizing ${ARC} on ${DS} @ ${BITS}-bit ..."
+                if [ "$DS" = "IMAGENET" ]; then
+                    singularity exec \
+                        --nv \
+                        --bind /blue \
+                        "${SIF}" \
+                        python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                            --data-root       "${DATASET_DIR}" \
+                            --artifacts-root  "${ARTIFACTS_DIR}" \
+                            --imagenet-root   "${IMAGENET_ROOT}" \
+                            --use-pretrained  1 \
+                            quantize \
+                            --dataset         "${DS}" \
+                            --arch            "${ARC}" \
+                            --bits            "${BITS}"
+                else
+                    singularity exec \
+                        --nv \
+                        --bind /blue \
+                        "${SIF}" \
+                        python3 "${SCRIPT_DIR}/test-Quantizer.py" \
+                            --data-root       "${DATASET_DIR}" \
+                            --artifacts-root  "${ARTIFACTS_DIR}" \
+                            quantize \
+                            --dataset         "${DS}" \
+                            --arch            "${ARC}" \
+                            --bits            "${BITS}"
+                fi
+            done
+        done
+    done
+fi
 
 echo ""
 echo "[1-Quantization/run.sh] Job finished with exit code $?"

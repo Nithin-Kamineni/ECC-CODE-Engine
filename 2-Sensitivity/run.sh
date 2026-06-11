@@ -29,7 +29,7 @@
 #   QUANT_LEVELS="32 8"         # run only float32 and 8-bit
 # =============================================================================
 
-#SBATCH --job-name=ecc-sensitivity
+#SBATCH --job-name=2-ecc-sensitivity
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -57,6 +57,7 @@ echo "[2-Sensitivity/run.sh] DATASETS=${DATASETS}"
 echo "[2-Sensitivity/run.sh] ARCHS=${ARCHS}"
 echo "[2-Sensitivity/run.sh] QUANT_LEVELS=${QUANT_LEVELS}"
 echo "[2-Sensitivity/run.sh] SENSITIVITY_DIR=${SENSITIVITY_DIR}"
+echo "[2-Sensitivity/run.sh] QAT_ENABLED=${QAT_ENABLED}"
 
 # ---- Helper: run python inside container ----
 run_py() {
@@ -87,18 +88,27 @@ for DS in $DATASETS; do
 
         for BITS in $QUANT_LEVELS; do
 
-            # Map quantization level to label, tag, and --quantize-bits flag
+            # Map quantization level to label and build mode-specific flags.
+            # BITS=32 is always the float32 baseline regardless of QAT_ENABLED.
+            # For quantized levels: PTQ applies in-memory quantization;
+            #                       QAT loads the pre-saved QAT checkpoint directly.
             if [ "${BITS}" = "32" ]; then
                 LABEL="float32"
-                TAG="float32"
-                QBITS_FLAG=""      # no quantization — run float32 baseline only
+                QBITS_FLAG=""
+                WEIGHTS_FLAG=""
+            elif [ "${QAT_ENABLED}" = "true" ]; then
+                LABEL="${BITS}-bit"
+                QAT_CKPT="${MODELS_DIR}/${DS_LOWER}/${ARC}/QAT/model_int${BITS}_qat.pth"
+                QBITS_FLAG=""
+                WEIGHTS_FLAG="--weights ${QAT_CKPT}"
             else
                 LABEL="${BITS}-bit"
-                TAG="int${BITS}"
                 QBITS_FLAG="--quantize-bits ${BITS}"
+                WEIGHTS_FLAG=""
             fi
 
-            SENS_OUT="${SENSITIVITY_DIR}/${DS_LOWER}/${ARC}/PTQ/${LABEL}"
+            QMODE="$( [ "${QAT_ENABLED}" = "true" ] && echo QAT || echo PTQ )"
+            SENS_OUT="${SENSITIVITY_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${LABEL}"
             mkdir -p "${SENS_OUT}"
 
             echo "  [Level ${BITS}] label=${LABEL}  out=${SENS_OUT}"
@@ -114,7 +124,7 @@ for DS in $DATASETS; do
                 --out-dir    "${SENS_OUT}" \
                 --methods magnitude grad_abs taylor fisher \
                 --max-batches "${MAX_B}" \
-                ${QBITS_FLAG} \
+                ${QBITS_FLAG} ${WEIGHTS_FLAG} \
                 ${PRETRAINED_FLAG} ${IMGNET_FLAG}
 
             # ------------------------------------------------------------------
@@ -131,7 +141,7 @@ for DS in $DATASETS; do
                 --top-per-layer "${TOP_PER_LAYER}" \
                 --layer-metric  "${LAYER_METRIC}" \
                 --max-batches   "${MAX_B}" \
-                ${QBITS_FLAG} \
+                ${QBITS_FLAG} ${WEIGHTS_FLAG} \
                 ${PRETRAINED_FLAG} ${IMGNET_FLAG}
 
         done  # BITS
