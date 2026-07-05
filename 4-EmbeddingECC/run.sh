@@ -143,11 +143,19 @@ if [ "${EMBED_SENSITIVITY}" != "true" ]; then
 else
     echo "[4-EmbeddingECC] EMBED_SENSITIVITY=true → using sensitivity weights"
 fi
+echo "[4-EmbeddingECC] SENS_NORM_MIN=${SENS_NORM_MIN}  (normalization floor; 0.0=raw taylor, 1.0=uniform)"
 
 # ---- If using C++ with sensitivity enabled, export Python sensitivity arrays ----
-# Produces <layer>_sens_py.npy files (continuous Taylor scores, normalized to [0.5,1.0])
+# Produces <layer>_sens_py.npy files (continuous Taylor scores, normalized to [SENS_NORM_MIN,1.0])
 # so C++ uses the same values as Python instead of the binary {0.5,1.0} from _sens.npy.
-# Files are cached — only re-exported if missing (or delete them to force re-export).
+# Files are cached by default — only re-exported if missing.
+# Set SENS_FORCE_EXPORT=true to force re-export (required when sweeping SENS_NORM_MIN,
+# because the cached files from the first run would otherwise be reused for all values).
+SENS_FORCE_FLAG=""
+if [ "${SENS_FORCE_EXPORT:-false}" = "true" ]; then
+    SENS_FORCE_FLAG="--force"
+    echo "[4-EmbeddingECC] SENS_FORCE_EXPORT=true → forcing re-export of sensitivity arrays"
+fi
 if [ "${USE_CPP}" = "true" ] && [ "${EMBED_SENSITIVITY}" = "true" ]; then
     echo "[4-EmbeddingECC] Exporting Python sensitivity arrays for C++ ..."
     for DS in $EMBED_DATASETS; do
@@ -163,7 +171,9 @@ if [ "${USE_CPP}" = "true" ] && [ "${EMBED_SENSITIVITY}" = "true" ]; then
                         --quant-bits      "${BITS}" \
                         --patterns-dir    "${PATTERNS_DIR}" \
                         --sensitivity-dir "${SENSITIVITY_DIR}" \
-                        --qmode           "${QMODE}"
+                        --qmode           "${QMODE}" \
+                        --sens-norm-min   "${SENS_NORM_MIN}" \
+                        ${SENS_FORCE_FLAG}
                 if [ $? -ne 0 ]; then
                     echo "[4-EmbeddingECC] ERROR: export_sensitivity.py failed for ${DS}/${ARC}/${BITS}-bit"
                     exit 1
@@ -195,6 +205,7 @@ run_embed_cpp() {
             --parity-matrix   "${BCH_PARITY_FILE}" \
             --qmode           "${QMODE}" \
             ${SENS_FLAG} \
+            --sens-norm-min   "${SENS_NORM_MIN}" \
             "$@"
 }
 
@@ -217,6 +228,7 @@ run_embed_py() {
             --chunks-dir    "${EMBEDDED_ECC_CHUNKS_DIR}" \
             --sensitivity-dir "${SENSITIVITY_DIR}" \
             --qmode         "${QMODE}" \
+            --sens-norm-min "${SENS_NORM_MIN}" \
             ${SENS_FLAG} \
             "$@"
 }

@@ -10,7 +10,8 @@ computation as ecc_embed.py's _load_layer_sensitivity():
          layer_then_weight_{ds}_{arch}_int{n}_L999xN30000_grad_norm.csv
   2. Weights absent from the CSV get baseline = min(taylor scores in layer).
   3. Build array aligned to the weight permutation order (same as Python).
-  4. Normalize to [0.5, 1.0]:  sens = 0.5 + 0.5 * (taylor / max_taylor)
+  4. Normalize to [min_norm, 1.0] (--sens-norm-min, default 0.5):
+         sens = min_norm + (1 - min_norm) * (taylor / max_taylor)
   5. Save as float32 → {patterns_dir}/{ds}/{arch}/{qmode}/{bits}/{layer}_sens_py.npy
 
   Additionally exports a permutation-INDEPENDENT array, indexed by the
@@ -56,11 +57,12 @@ def _sanitize(name: str) -> str:
 
 def _load_layer_sensitivity(sensitivity_dir: str, ds_lower: str, arch: str,
                              quant_bits: int, layer_name: str,
-                             perm_arr, qmode: str = "PTQ") -> np.ndarray:
+                             perm_arr, qmode: str = "PTQ",
+                             min_norm: float = 0.5) -> np.ndarray:
     """
     Exact copy of ecc_embed.py's _load_layer_sensitivity().
 
-    Returns float64 ndarray of shape (N,) with values in [0.5, 1.0],
+    Returns float64 ndarray of shape (N,) with values in [min_norm, 1.0],
     already aligned to the permuted weight order (perm_arr applied).
     """
     bit_label = f"{quant_bits}-bit"
@@ -87,7 +89,7 @@ def _load_layer_sensitivity(sensitivity_dir: str, ds_lower: str, arch: str,
 
     max_val = float(sens_arr.max())
     if max_val > 0.0:
-        sens_arr = 0.5 + 0.5 * (sens_arr / max_val)   # normalize to [0.5, 1.0]
+        sens_arr = min_norm + (1.0 - min_norm) * (sens_arr / max_val)   # normalize to [min_norm, 1.0]
     else:
         sens_arr[:] = 1.0                               # uniform fallback
 
@@ -105,7 +107,7 @@ def main():
                     help="Dataset name (case-sensitive)")
     ap.add_argument("--arch",             required=True,
                     help="Architecture name (e.g. resnet18, mobilenet_v2)")
-    ap.add_argument("--quant-bits",       required=True, type=int, choices=[4, 8, 16],
+    ap.add_argument("--quant-bits",       required=True, type=int, choices=[4, 6, 8, 16],
                     help="Quantization bit-width")
     ap.add_argument("--patterns-dir",     required=True,
                     help="Root of 0-Data/artifacts/patterns/ (where _sens.npy files live)")
@@ -115,7 +117,13 @@ def main():
                     help="PTQ or QAT — selects the patterns/ and sensitivity/ subdirectory.")
     ap.add_argument("--force",            action="store_true",
                     help="Re-export even if _sens_py.npy already exists")
+    ap.add_argument("--sens-norm-min", type=float, default=0.5,
+                    help="Floor of the Taylor-score normalization range [min,1.0] "
+                         "(controlled by SENS_NORM_MIN in env.sh). 0.0 = raw "
+                         "max-normalized scores; 1.0 = uniform (no sensitivity effect).")
     args = ap.parse_args()
+    if not (0.0 <= args.sens_norm_min <= 1.0):
+        raise ValueError(f"--sens-norm-min must be in [0.0, 1.0], got {args.sens_norm_min}")
 
     ds_lower  = args.dataset.lower()
     bit_label = f"{args.quant_bits}-bit"
@@ -191,7 +199,7 @@ def main():
             )
             max_val = float(dense_arr.max())
             if max_val > 0.0:
-                dense_arr = 0.5 + 0.5 * (dense_arr / max_val)
+                dense_arr = args.sens_norm_min + (1.0 - args.sens_norm_min) * (dense_arr / max_val)
             else:
                 dense_arr[:] = 1.0
             np.save(dense_out_path, dense_arr.astype(np.float32))

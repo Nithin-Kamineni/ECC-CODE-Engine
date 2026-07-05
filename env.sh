@@ -40,11 +40,13 @@ ARCHS="${ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
 # ---- Default runtime parameters ----
 BATCH_SIZE="${BATCH_SIZE:-128}"
 DEVICE="${DEVICE:-cuda}"
-QUANTIZE_BITS="${QUANTIZE_BITS:-8 4}"
+# QUANTIZE_BITS="${QUANTIZE_BITS:-8 4}"
+QUANTIZE_BITS="${QUANTIZE_BITS:-6}"
 # QUANT_LEVELS — full sweep used in 2-Sensitivity and 3-PatternFinder loops.
 # 32 = float32 baseline (no quantization); 16/8/4 = PTQ levels.
 # Scripts map 32 → float32 label internally. Modify freely.
-QUANT_LEVELS="${QUANT_LEVELS:-8 4}"
+# QUANT_LEVELS="${QUANT_LEVELS:-8 4}"
+QUANT_LEVELS="${QUANT_LEVELS:-6}"
 TOP_LAYERS="${TOP_LAYERS:-999}"
 TOP_PER_LAYER="${TOP_PER_LAYER:-30000}"
 LAYER_METRIC="${LAYER_METRIC:-grad_norm}"
@@ -53,7 +55,7 @@ MAX_BATCHES="${MAX_BATCHES:-8}"
 # ---- PatternFinder parameters ----
 GROUP_SIZE="${GROUP_SIZE:-8}"
 MAX_SENS="${MAX_SENS:-3}"
-TOP_SENSITIVE="${TOP_SENSITIVE:-100}"
+TOP_SENSITIVE="${TOP_SENSITIVE:-300}"
 # SENS_THRESHOLD: Taylor score cutoff — weights above this are counted as sensitive.
 # The final sensitive set = max(threshold_count, TOP_SENSITIVE).
 SENS_THRESHOLD="${SENS_THRESHOLD:-0.001}"
@@ -68,6 +70,7 @@ MAX_STRIDE="${MAX_STRIDE:-256}"
 SKIP_TRAIN="${SKIP_TRAIN:-false}"
 
 QAT_ENABLED="${QAT_ENABLED:-true}" # set to true to enable Quantization-Aware Training (QAT) instead of Post-Training Quantization (PTQ)
+
 QAT_EPOCHS="${QAT_EPOCHS:-30}"           # QAT fine-tuning epochs (much less than full training)
 QAT_LR="${QAT_LR:-1e-3}"                # smaller LR for QAT fine-tuning
 QAT_SKIP_FIRST_LAST="${QAT_SKIP_FIRST_LAST:-0}"  # 1 = leave first Conv2d + last Linear at float32 (helps INT4 robustness)
@@ -90,22 +93,37 @@ EMBED_SKIP_PROCESS="${EMBED_SKIP_PROCESS:-false}" # set to true to skip the embe
 
 EMBED_RUN_CPP="${EMBED_RUN_CPP:-true}" # set to true to run the C++ embedding code (requires separate compile step)
 EMBED_SENSITIVITY="${EMBED_SENSITIVITY:-true}"  # true = use sensitivity weights; false = all weights = 1.0 (uniform, disables loading)
+SENS_NORM_MIN="${SENS_NORM_MIN:-0.5}"  # floor of Taylor-score normalization range [min,1.0].
+                                        # 0.0 = raw max-normalized taylor scores; 1.0 = uniform (no sensitivity effect)
 # Modify these to subset the combinations you actually want to embed.
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
 # EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
 EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
-EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
-# EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8}"   # quantized levels only (not float32)
+# EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
+EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-6}"   # quantized levels only (not float32)
 EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
 EMBED_CODEWORD="${EMBED_CODEWORD:-63}"         # M value in M{codeword}_t{tval} path
 EMBED_WORKERS="${EMBED_WORKERS:-8}"
 EMBEDDED_ECC_DIR="${EMBEDDED_ECC_DIR:-${ARTIFACTS_DIR}/embeddedECC}"
 EMBEDDED_ECC_CHUNKS_DIR="${EMBEDDED_ECC_CHUNKS_DIR:-${ARTIFACTS_DIR}/embeddedECC_Chunks}"
 
-# ---- Ensure output directories exist ----
-mkdir -p "${MODELS_DIR}" "${SENSITIVITY_DIR}" "${PATTERNS_DIR}" \
-         "${EMBEDDED_ECC_DIR}" "${EMBEDDED_ECC_CHUNKS_DIR}" "${BEST_PATTERNS_DIR}"
+# ---- Ensure output directories exist (retry: /blue NFS mounts can be
+#      transiently stale on some compute nodes — "Transport endpoint is
+#      not connected") ----
+_ensure_dirs() {
+    for attempt in 1 2 3 4 5; do
+        if mkdir -p "${MODELS_DIR}" "${SENSITIVITY_DIR}" "${PATTERNS_DIR}" \
+                    "${EMBEDDED_ECC_DIR}" "${EMBEDDED_ECC_CHUNKS_DIR}" "${BEST_PATTERNS_DIR}" 2>/dev/null; then
+            return 0
+        fi
+        echo "[env.sh] WARNING: mkdir failed on $(hostname) (attempt ${attempt}/5) — /blue may be stale, retrying in 10s..." >&2
+        sleep 10
+    done
+    echo "[env.sh] FATAL: /blue not accessible on $(hostname) after 5 attempts — exiting for resubmission" >&2
+    exit 1
+}
+_ensure_dirs
 
 export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        MODELS_DIR SENSITIVITY_DIR PATTERNS_DIR IMAGENET_ROOT \
@@ -116,4 +134,4 @@ export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        DISABLE_PATTERN_FIND TOP_PATTERNS BEST_PATTERNS_DIR \
        EMBED_DATASETS EMBED_ARCHS EMBED_QUANT_BITS EMBED_APPROACH \
        EMBED_CODEWORD EMBED_WORKERS EMBEDDED_ECC_DIR EMBEDDED_ECC_CHUNKS_DIR \
-       EMBED_RUN_CPP EMBED_SENSITIVITY EMBED_SKIP_PROCESS
+       EMBED_RUN_CPP EMBED_SENSITIVITY SENS_NORM_MIN EMBED_SKIP_PROCESS

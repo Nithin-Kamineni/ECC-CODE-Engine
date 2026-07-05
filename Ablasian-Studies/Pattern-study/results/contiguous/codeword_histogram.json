@@ -1,0 +1,1166 @@
+{
+  "group_size": 8,
+  "threshold": 0.001,
+  "total_codewords": 654524,
+  "histogram": [
+    628986,
+    18258,
+    4031,
+    1670,
+    756,
+    360,
+    196,
+    98,
+    169
+  ],
+  "layers": {
+    "features.1.0.block.0.0.weight": {
+      "n_codewords": 36,
+      "histogram": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        36
+      ]
+    },
+    "features.1.0.block.2.0.weight": {
+      "n_codewords": 64,
+      "histogram": [
+        0,
+        0,
+        2,
+        7,
+        23,
+        12,
+        17,
+        3,
+        0
+      ]
+    },
+    "features.2.0.block.1.0.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        13,
+        10,
+        12,
+        11,
+        14,
+        7,
+        9,
+        11,
+        21
+      ]
+    },
+    "features.2.1.block.1.0.weight": {
+      "n_codewords": 162,
+      "histogram": [
+        39,
+        44,
+        26,
+        23,
+        10,
+        10,
+        4,
+        5,
+        1
+      ]
+    },
+    "features.7.0.block.1.0.weight": {
+      "n_codewords": 1296,
+      "histogram": [
+        1061,
+        116,
+        30,
+        29,
+        25,
+        25,
+        5,
+        4,
+        1
+      ]
+    },
+    "features.3.0.block.3.0.weight": {
+      "n_codewords": 720,
+      "histogram": [
+        133,
+        179,
+        162,
+        102,
+        72,
+        47,
+        22,
+        3,
+        0
+      ]
+    },
+    "features.2.0.block.3.0.weight": {
+      "n_codewords": 288,
+      "histogram": [
+        46,
+        52,
+        47,
+        57,
+        27,
+        34,
+        17,
+        6,
+        2
+      ]
+    },
+    "features.1.0.block.1.fc1.weight": {
+      "n_codewords": 32,
+      "histogram": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        32
+      ]
+    },
+    "features.4.0.block.3.0.weight": {
+      "n_codewords": 2400,
+      "histogram": [
+        1146,
+        539,
+        342,
+        221,
+        109,
+        28,
+        11,
+        3,
+        1
+      ]
+    },
+    "features.0.0.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        23,
+        13,
+        20,
+        16,
+        9,
+        12,
+        5,
+        7,
+        3
+      ]
+    },
+    "features.6.0.block.3.0.weight": {
+      "n_codewords": 16128,
+      "histogram": [
+        10982,
+        3368,
+        1203,
+        442,
+        105,
+        24,
+        4,
+        0,
+        0
+      ]
+    },
+    "features.4.0.block.1.0.weight": {
+      "n_codewords": 270,
+      "histogram": [
+        155,
+        29,
+        14,
+        27,
+        15,
+        8,
+        12,
+        6,
+        4
+      ]
+    },
+    "features.6.0.block.1.0.weight": {
+      "n_codewords": 2100,
+      "histogram": [
+        1727,
+        86,
+        144,
+        60,
+        54,
+        17,
+        11,
+        1,
+        0
+      ]
+    },
+    "features.2.1.block.3.0.weight": {
+      "n_codewords": 432,
+      "histogram": [
+        170,
+        138,
+        76,
+        33,
+        14,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.3.0.block.1.0.weight": {
+      "n_codewords": 450,
+      "histogram": [
+        322,
+        41,
+        33,
+        28,
+        10,
+        5,
+        5,
+        4,
+        2
+      ]
+    },
+    "features.2.0.block.0.0.weight": {
+      "n_codewords": 192,
+      "histogram": [
+        56,
+        54,
+        40,
+        22,
+        9,
+        3,
+        7,
+        1,
+        0
+      ]
+    },
+    "features.2.0.block.2.fc1.weight": {
+      "n_codewords": 48,
+      "histogram": [
+        0,
+        0,
+        1,
+        2,
+        1,
+        10,
+        12,
+        10,
+        12
+      ]
+    },
+    "features.3.0.block.2.fc1.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        28,
+        16,
+        14,
+        13,
+        6,
+        5,
+        14,
+        12,
+        0
+      ]
+    },
+    "features.3.0.block.0.0.weight": {
+      "n_codewords": 432,
+      "histogram": [
+        201,
+        128,
+        58,
+        29,
+        9,
+        6,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.5.0.block.1.0.weight": {
+      "n_codewords": 1500,
+      "histogram": [
+        1242,
+        224,
+        14,
+        13,
+        5,
+        1,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.3.1.block.1.0.weight": {
+      "n_codewords": 750,
+      "histogram": [
+        555,
+        140,
+        27,
+        13,
+        9,
+        5,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.3.1.block.3.0.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        947,
+        207,
+        45,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.1.block.1.0.weight": {
+      "n_codewords": 540,
+      "histogram": [
+        323,
+        169,
+        30,
+        8,
+        6,
+        1,
+        3,
+        0,
+        0
+      ]
+    },
+    "features.4.0.block.2.fc1.weight": {
+      "n_codewords": 300,
+      "histogram": [
+        127,
+        94,
+        46,
+        20,
+        11,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.3.0.block.2.fc2.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        6,
+        13,
+        32,
+        21,
+        21,
+        14,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.2.1.block.2.fc2.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        9,
+        13,
+        25,
+        22,
+        25,
+        13,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.5.0.block.3.0.weight": {
+      "n_codewords": 6720,
+      "histogram": [
+        6044,
+        573,
+        91,
+        11,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.2.1.block.0.0.weight": {
+      "n_codewords": 432,
+      "histogram": [
+        238,
+        121,
+        49,
+        18,
+        3,
+        3,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.7.0.block.2.fc2.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6615,
+        215,
+        44,
+        17,
+        13,
+        4,
+        2,
+        2,
+        0
+      ]
+    },
+    "features.4.2.block.1.0.weight": {
+      "n_codewords": 540,
+      "histogram": [
+        334,
+        153,
+        27,
+        16,
+        7,
+        2,
+        0,
+        1,
+        0
+      ]
+    },
+    "features.4.0.block.0.0.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        849,
+        245,
+        82,
+        19,
+        5,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.7.0.block.2.fc1.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6354,
+        492,
+        62,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.2.0.block.2.fc2.weight": {
+      "n_codewords": 48,
+      "histogram": [
+        0,
+        0,
+        0,
+        3,
+        5,
+        6,
+        11,
+        9,
+        14
+      ]
+    },
+    "features.2.1.block.2.fc1.weight": {
+      "n_codewords": 108,
+      "histogram": [
+        9,
+        22,
+        21,
+        20,
+        16,
+        10,
+        8,
+        2,
+        0
+      ]
+    },
+    "features.7.0.block.3.0.weight": {
+      "n_codewords": 46080,
+      "histogram": [
+        45327,
+        716,
+        35,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.7.0.block.0.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27032,
+        498,
+        85,
+        28,
+        3,
+        1,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.1.0.block.1.fc2.weight": {
+      "n_codewords": 32,
+      "histogram": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        32
+      ]
+    },
+    "features.5.0.block.2.fc1.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        985,
+        156,
+        38,
+        16,
+        5,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.2.block.1.0.weight": {
+      "n_codewords": 2100,
+      "histogram": [
+        1860,
+        208,
+        21,
+        4,
+        3,
+        2,
+        0,
+        0,
+        2
+      ]
+    },
+    "features.6.0.block.0.0.weight": {
+      "n_codewords": 9408,
+      "histogram": [
+        9101,
+        283,
+        23,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.2.block.3.0.weight": {
+      "n_codewords": 4800,
+      "histogram": [
+        4532,
+        237,
+        30,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.3.1.block.2.fc2.weight": {
+      "n_codewords": 300,
+      "histogram": [
+        155,
+        62,
+        40,
+        23,
+        13,
+        6,
+        0,
+        1,
+        0
+      ]
+    },
+    "features.4.1.block.3.0.weight": {
+      "n_codewords": 4800,
+      "histogram": [
+        4516,
+        268,
+        16,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.1.block.1.0.weight": {
+      "n_codewords": 2100,
+      "histogram": [
+        1848,
+        219,
+        23,
+        7,
+        2,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    "features.6.3.block.1.0.weight": {
+      "n_codewords": 3600,
+      "histogram": [
+        3361,
+        206,
+        15,
+        11,
+        4,
+        3,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.0.block.0.0.weight": {
+      "n_codewords": 4800,
+      "histogram": [
+        4524,
+        256,
+        17,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.3.1.block.0.0.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        956,
+        198,
+        38,
+        6,
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.0.block.2.fc2.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        1003,
+        135,
+        37,
+        14,
+        8,
+        2,
+        0,
+        1,
+        0
+      ]
+    },
+    "features.6.3.block.3.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27349,
+        298,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.1.block.1.0.weight": {
+      "n_codewords": 3600,
+      "histogram": [
+        3332,
+        246,
+        15,
+        5,
+        1,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.2.block.3.0.weight": {
+      "n_codewords": 9408,
+      "histogram": [
+        9130,
+        260,
+        15,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.8.0.weight": {
+      "n_codewords": 51200,
+      "histogram": [
+        50917,
+        266,
+        17,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.2.block.1.0.weight": {
+      "n_codewords": 3600,
+      "histogram": [
+        3347,
+        219,
+        22,
+        11,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.1.block.3.0.weight": {
+      "n_codewords": 9408,
+      "histogram": [
+        9113,
+        290,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.3.block.2.fc2.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6693,
+        163,
+        37,
+        14,
+        4,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.2.block.2.fc2.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        1015,
+        113,
+        47,
+        12,
+        8,
+        5,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.3.1.block.2.fc1.weight": {
+      "n_codewords": 300,
+      "histogram": [
+        132,
+        86,
+        41,
+        34,
+        5,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.0.block.2.fc2.weight": {
+      "n_codewords": 300,
+      "histogram": [
+        196,
+        26,
+        27,
+        18,
+        14,
+        10,
+        5,
+        2,
+        2
+      ]
+    },
+    "features.4.1.block.2.fc2.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        1023,
+        107,
+        36,
+        21,
+        9,
+        2,
+        2,
+        0,
+        0
+      ]
+    },
+    "features.6.1.block.3.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27355,
+        286,
+        7,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.3.block.0.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27390,
+        223,
+        28,
+        7,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.2.block.3.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27360,
+        276,
+        12,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.2.block.0.0.weight": {
+      "n_codewords": 4800,
+      "histogram": [
+        4534,
+        237,
+        25,
+        3,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.2.block.2.fc2.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2146,
+        144,
+        37,
+        20,
+        3,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.1.block.0.0.weight": {
+      "n_codewords": 4800,
+      "histogram": [
+        4529,
+        244,
+        25,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.2.block.0.0.weight": {
+      "n_codewords": 9408,
+      "histogram": [
+        9132,
+        254,
+        20,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.1.block.0.0.weight": {
+      "n_codewords": 9408,
+      "histogram": [
+        9121,
+        274,
+        13,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.1.block.2.fc2.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2158,
+        126,
+        40,
+        20,
+        6,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.1.block.2.fc2.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6667,
+        200,
+        36,
+        8,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.2.block.2.fc2.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6677,
+        183,
+        42,
+        7,
+        3,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.1.block.0.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27379,
+        246,
+        16,
+        6,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.2.block.0.0.weight": {
+      "n_codewords": 27648,
+      "histogram": [
+        27367,
+        263,
+        17,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.0.block.2.fc1.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2086,
+        235,
+        29,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.3.block.2.fc1.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6625,
+        274,
+        13,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.1.block.2.fc1.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        953,
+        201,
+        40,
+        5,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.4.2.block.2.fc1.weight": {
+      "n_codewords": 1200,
+      "histogram": [
+        943,
+        218,
+        36,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "classifier.1.weight": {
+      "n_codewords": 160000,
+      "histogram": [
+        159729,
+        245,
+        23,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.2.block.2.fc1.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2073,
+        260,
+        17,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.1.block.2.fc1.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6624,
+        277,
+        10,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.2.block.2.fc1.weight": {
+      "n_codewords": 6912,
+      "histogram": [
+        6626,
+        273,
+        12,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.5.1.block.2.fc1.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2075,
+        259,
+        14,
+        3,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "features.6.0.block.2.fc2.weight": {
+      "n_codewords": 2352,
+      "histogram": [
+        2236,
+        50,
+        19,
+        16,
+        14,
+        6,
+        3,
+        4,
+        4
+      ]
+    }
+  }
+}

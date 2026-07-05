@@ -51,6 +51,9 @@ T_VALUE="${SLURM_ARRAY_TASK_ID}"
 # ---- Output directory for accuracy results ----
 RESULTS_DIR="${ARTIFACTS_DIR}/accuracy_results"
 
+# ---- PTQ vs QAT (QMODE) is selected by QAT_ENABLED, mirroring 2/3/4/5. ----
+QMODE="$( [ "${QAT_ENABLED}" = "true" ] && echo QAT || echo PTQ )"
+
 echo "[6-BaseAccuracyTesting/run.sh] SIF=${SIF}"
 echo "[6-BaseAccuracyTesting/run.sh] T_VALUE=${T_VALUE}  (SLURM array task)"
 echo "[6-BaseAccuracyTesting/run.sh] EMBED_DATASETS=${EMBED_DATASETS}"
@@ -59,6 +62,7 @@ echo "[6-BaseAccuracyTesting/run.sh] EMBED_QUANT_BITS=${EMBED_QUANT_BITS}"
 echo "[6-BaseAccuracyTesting/run.sh] EMBED_APPROACH=${EMBED_APPROACH}  EMBED_CODEWORD=${EMBED_CODEWORD}"
 echo "[6-BaseAccuracyTesting/run.sh] EMBEDDED_ECC_DIR=${EMBEDDED_ECC_DIR}"
 echo "[6-BaseAccuracyTesting/run.sh] RESULTS_DIR=${RESULTS_DIR}"
+echo "[6-BaseAccuracyTesting/run.sh] QAT_ENABLED=${QAT_ENABLED}  QMODE=${QMODE}"
 
 # ---- Loop over all dataset × arch × quant-bits combinations ----
 for DS in $EMBED_DATASETS; do
@@ -66,7 +70,7 @@ for DS in $EMBED_DATASETS; do
         for BITS in $EMBED_QUANT_BITS; do
             DS_LOWER="${DS,,}"
             BIT_LABEL="${BITS}-bit"
-            ECC_MODEL="${EMBEDDED_ECC_DIR}/${DS_LOWER}/${ARC}/PTQ/${BIT_LABEL}/M${EMBED_CODEWORD}_t${T_VALUE}/${EMBED_APPROACH}/ECC_Embedded_model.pth"
+            ECC_MODEL="${EMBEDDED_ECC_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/M${EMBED_CODEWORD}_t${T_VALUE}/${EMBED_APPROACH}/ECC_Embedded_model.pth"
 
             if [ ! -f "${ECC_MODEL}" ]; then
                 echo "[skip] ECC model not found: ${ECC_MODEL}"
@@ -74,7 +78,7 @@ for DS in $EMBED_DATASETS; do
             fi
 
             echo "========================================================"
-            echo "[6-BaseAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE}"
+            echo "[6-BaseAccuracyTesting] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE}"
             echo "========================================================"
 
             IMAGENET_ARG=""
@@ -95,9 +99,10 @@ for DS in $EMBED_DATASETS; do
                     --codeword      "${EMBED_CODEWORD}" \
                     --ecc-dir       "${EMBEDDED_ECC_DIR}" \
                     --results-dir   "${RESULTS_DIR}" \
+                    --qmode         "${QMODE}" \
                     ${IMAGENET_ARG}
 
-            echo "[6-BaseAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
+            echo "[6-BaseAccuracyTesting] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done
     done
 done

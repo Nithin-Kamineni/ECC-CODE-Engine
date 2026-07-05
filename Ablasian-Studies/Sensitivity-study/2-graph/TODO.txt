@@ -1,0 +1,14 @@
+Sensitivity-study — Part 2 (graph) — not yet implemented.
+
+Planned plot: for a FIXED model and FIXED BER (t-value), plot accuracy vs
+the min-norm normalization value used during ECC embedding in
+4-EmbeddingECC (the value that controls how sensitivity-weighted bucket
+selection is normalized — see ecc_embed.py's sensitivity loading /
+bucket_sens handling).
+
+This requires sweeping that min-norm value across multiple embedding runs
+(not yet produced anywhere in 0-Data) and recording accuracy for each, so
+no data exists for this yet. Build the plotting script here once that sweep
+has been run, following the same conventions as
+Ablasian-Studies/Weight-distortion/plot_weight_distortion.py (argparse for
+model/BER selection, log-and-skip for missing data, matplotlib Agg backend).

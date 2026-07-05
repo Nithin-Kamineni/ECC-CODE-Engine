@@ -1,0 +1,10 @@
+{
+  "dataset": "IMAGENET",
+  "arch": "mobilenet_v2",
+  "bits": 8,
+  "t": 4,
+  "approach": "search3",
+  "codeword": 63,
+  "top1": 63.668,
+  "top5": 85.474
+}

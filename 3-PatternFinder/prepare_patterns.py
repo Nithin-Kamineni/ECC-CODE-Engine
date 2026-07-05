@@ -223,6 +223,16 @@ def _import_find_pattern(path_hint=None):
     raise FileNotFoundError("find_pattern.py not found (use --find-pattern-path)")
 
 
+def _compute_codeword_histogram(sens, perm, group_size, threshold):
+    """hist[k] = number of codewords with exactly k sensitive weights (0 ≤ k ≤ group_size)."""
+    n_groups = len(perm) // group_size
+    if n_groups == 0:
+        return np.zeros(group_size + 1, dtype=np.int64)
+    g = perm[:n_groups * group_size].reshape(n_groups, group_size)
+    counts = (sens[g] > threshold).sum(axis=1).astype(np.int64)
+    return np.bincount(counts, minlength=group_size + 1)
+
+
 def layer_order(df):
     seen = []
     for L in df["layer"].tolist():
@@ -254,6 +264,9 @@ def main():
     ap.add_argument("--identity-perm", action="store_true",
                     help="Skip search; save identity permutation and original "
                          "weights for every layer (DISABLE_PATTERN_FIND mode).")
+    ap.add_argument("--random-stride", action="store_true",
+                    help="Skip search; pick one random coprime stride per layer "
+                         "(fresh random each run, no seed).")
     ap.add_argument("--find-pattern-path", default=None)
     ap.add_argument("--group-size", type=int, default=8)
     ap.add_argument("--max-sens", type=int, default=2)
@@ -327,21 +340,24 @@ def main():
     # load model state dict for weight extraction (if checkpoint provided)
     # Use raw int8 values so ECC embedding operates on the actual quantized bit patterns.
     sd = {}
-    if args.model_path and (args.run_search or args.identity_perm):
+    if args.model_path and (args.run_search or args.identity_perm or args.random_stride):
         if args.qmode == "QAT":
             sd = _load_raw_sd_from_qat_ckpt(args.model_path)
         else:
             sd = _load_raw_sd_from_ckpt(args.model_path)
         print(f"[model] loaded {len(sd)} tensors from {args.model_path} (qmode={args.qmode})")
 
-    # top-K patterns saved per layer (forced to 1 for identity mode)
-    top_k = 1 if args.identity_perm else max(1, args.top_k)
+    # top-K patterns saved per layer (forced to 1 for identity and random modes)
+    top_k = 1 if (args.identity_perm or args.random_stride) else max(1, args.top_k)
 
     # combined flat-index export
     flat_export  = []
     search_summary = []
     manifest     = {}
     top_patterns_manifest = {}
+    layer_histograms: dict = {}   # {layer: np.ndarray histogram}
+    # threshold used uniformly for histogram computation across all branches
+    _study_thr = args.threshold if args.threshold is not None else 0.5
 
     for L in layers:
         if L not in numel_map:
@@ -512,6 +528,11 @@ def main():
                 "best_violating_groups": bm["violating_groups"],
             })
 
+            # histogram for rank-0 (best) pattern
+            perm_rank0 = fp.make_perm(best["family"], best["param"], N)
+            layer_histograms[L] = _compute_codeword_histogram(
+                sens, perm_rank0, args.group_size, thr_val)
+
         elif args.identity_perm:
             perm     = np.arange(N, dtype=np.int64)
             inv_perm = np.arange(N, dtype=np.int64)   # identity is its own inverse
@@ -584,6 +605,100 @@ def main():
                 "best_violating_groups": None,
             })
 
+            layer_histograms[L] = _compute_codeword_histogram(
+                sens, np.arange(N, dtype=np.int64), args.group_size, _study_thr)
+
+        elif args.random_stride:
+            from math import gcd as _gcd
+            fp_r = _import_find_pattern(args.find_pattern_path)
+            valid = [s for s in range(2, min(args.max_stride, N - 1) + 1) if _gcd(s, N) == 1]
+            if not valid:
+                print(f"   [{L}] no coprime strides in [2,{args.max_stride}], falling back to identity")
+                s = 1
+                perm     = np.arange(N, dtype=np.int64)
+                inv_perm = np.arange(N, dtype=np.int64)
+                best_family = "identity"
+            else:
+                s = int(np.random.default_rng().choice(valid))
+                perm     = (np.arange(N, dtype=np.int64) * s) % N
+                inv_perm = np.zeros(N, dtype=np.int64)
+                inv_perm[perm] = np.arange(N, dtype=np.int64)
+                best_family = "random"
+                print(f"   [{L}]  N={N:,}  random stride s={s}")
+
+            m = fp_r.evaluate(sens, perm, args.group_size, _study_thr, args.max_sens)
+
+            perm_file     = os.path.join(args.out_dir, f"{_sanitize(L)}_rank0_perm.npy")
+            inv_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_rank0_inv_perm.npy")
+            np.save(perm_file, perm)
+            np.save(inv_perm_file, inv_perm)
+
+            w_perm_file = None
+            layer_shape = None
+            if L in sd:
+                layer_shape = list(sd[L].shape)
+                w_perm_file = os.path.join(args.out_dir, f"{_sanitize(L)}_rank0_weights_perm.npy")
+                np.save(w_perm_file, sd[L].flatten()[perm])
+
+            txt = os.path.join(args.out_dir, f"{_sanitize(L)}_best_pattern.txt")
+            with open(txt, "w") as f:
+                f.write(f"layer: {L}\nN: {N}\npattern: {best_family} stride s={s}\n"
+                        f"metrics: {m}\n")
+
+            manifest[L] = {
+                "layer":                 L,
+                "N":                     N,
+                "shape":                 layer_shape,
+                "group_size":            args.group_size,
+                "max_sens":              args.max_sens,
+                "threshold":             float(_study_thr),
+                "top_sensitive":         args.top_sensitive,
+                "n_marked":              int(n_mark),
+                "best_family":           best_family,
+                "best_param":            int(s),
+                "identity_excess":       None,
+                "best_excess":           m["total_excess"],
+                "best_violating_groups": m["violating_groups"],
+                "best_max_in_group":     m["max_in_group"],
+                "model_path":            args.model_path,
+                "perm_file":             perm_file,
+                "inv_perm_file":         inv_perm_file,
+                "weights_perm_file":     w_perm_file,
+            }
+
+            top_patterns_manifest[L] = {
+                "layer":           L,
+                "N":               N,
+                "shape":           layer_shape,
+                "group_size":      args.group_size,
+                "max_sens":        args.max_sens,
+                "threshold":       float(_study_thr),
+                "identity_excess": None,
+                "model_path":      args.model_path,
+                "top_patterns": [{
+                    "rank":              0,
+                    "family":            best_family,
+                    "param":             int(s),
+                    "excess":            m["total_excess"],
+                    "max_in_group":      m["max_in_group"],
+                    "violating_groups":  m["violating_groups"],
+                    "perm_file":         perm_file,
+                    "inv_perm_file":     inv_perm_file,
+                    "weights_perm_file": w_perm_file,
+                }],
+            }
+
+            search_summary.append({
+                "layer": L, "N": N, "selected": int(fidx.size),
+                "best_family": best_family, "best_param": int(s),
+                "identity_excess": None, "best_excess": m["total_excess"],
+                "identity_max_in_group": None, "best_max_in_group": m["max_in_group"],
+                "best_violating_groups": m["violating_groups"],
+            })
+
+            layer_histograms[L] = _compute_codeword_histogram(
+                sens, perm, args.group_size, _study_thr)
+
     # write combined exports
     fe = pd.DataFrame(flat_export)
     fe_path = os.path.join(args.out_dir, "sensitive_flatidx_by_layer.csv")
@@ -612,6 +727,25 @@ def main():
             json.dump(top_patterns_manifest, f, indent=2)
         print(f"[saved] {top_manifest_path}  ({len(top_patterns_manifest)} layers, "
               f"top_k={top_k})")
+
+    if layer_histograms:
+        import functools
+        agg_hist = functools.reduce(lambda a, b: a + b, layer_histograms.values())
+        histogram_data = {
+            "group_size": args.group_size,
+            "threshold": float(_study_thr),
+            "total_codewords": int(agg_hist.sum()),
+            "histogram": agg_hist.tolist(),
+            "layers": {
+                L: {"n_codewords": int(h.sum()), "histogram": h.tolist()}
+                for L, h in layer_histograms.items()
+            },
+        }
+        hist_path = os.path.join(args.out_dir, "codeword_histogram.json")
+        with open(hist_path, "w") as f:
+            json.dump(histogram_data, f, indent=2)
+        print(f"[saved] {hist_path}  ({len(layer_histograms)} layers, "
+              f"{int(agg_hist.sum())} total codewords)")
 
     print(f"\n[done] {args.out_dir}")
 

@@ -59,6 +59,7 @@ struct Args {
     int         move_range      = 4;
     std::string parity_matrix;  // optional: path to Python-exported P matrix .npy
     bool        no_sensitivity  = false;  // --no-sensitivity: skip loading, use sens=1.0 for all
+    float       sens_norm_min   = 0.5f;   // --sens-norm-min: floor of [min,1.0] normalization
     std::string qmode           = "PTQ";  // PTQ or QAT — selects patterns/{qmode}/ subdirectory
     std::string top_patterns_dir;         // top_patterns_manifest.json root (top-K flow)
     std::string best_patterns_dir;        // best_pattern_selection.json root (top-K flow)
@@ -72,6 +73,7 @@ static void print_usage(const char* prog) {
         "           [--sensitivity-dir PATH] [--move-range R]\n"
         "           [--parity-matrix PATH]  # .npy exported by export_parity_matrix.py\n"
         "           [--no-sensitivity]      # disable sensitivity: all bucket weights = 1.0\n"
+        "           [--sens-norm-min F]     # sensitivity normalization floor [0.0,1.0] (default 0.5)\n"
         "           [--qmode (PTQ|QAT)]     # selects patterns/{qmode}/ subdirectory (default PTQ)\n"
         "           [--top-patterns-dir PATH]  # top_patterns_manifest.json root (top-K flow)\n"
         "           [--best-patterns-dir PATH] # best_pattern_selection.json root (top-K flow)\n",
@@ -99,6 +101,7 @@ static Args parse_args(int argc, char** argv) {
         else if (key == "--move-range")      args.move_range     = std::stoi(next());
         else if (key == "--parity-matrix")   args.parity_matrix  = next();
         else if (key == "--no-sensitivity")  args.no_sensitivity = true;
+        else if (key == "--sens-norm-min")   args.sens_norm_min  = std::stof(next());
         else if (key == "--qmode")           args.qmode          = next();
         else if (key == "--top-patterns-dir")  args.top_patterns_dir  = next();
         else if (key == "--best-patterns-dir") args.best_patterns_dir = next();
@@ -112,6 +115,10 @@ static Args parse_args(int argc, char** argv) {
     }
     if (args.qmode != "PTQ" && args.qmode != "QAT") {
         fprintf(stderr, "--qmode must be PTQ or QAT (got '%s')\n", args.qmode.c_str());
+        exit(1);
+    }
+    if (args.sens_norm_min < 0.0f || args.sens_norm_min > 1.0f) {
+        fprintf(stderr, "--sens-norm-min must be in [0.0, 1.0] (got %.3f)\n", args.sens_norm_min);
         exit(1);
     }
     return args;
@@ -133,9 +140,14 @@ static std::string ds_lower(const std::string& ds) {
 
 // ---- Load sensitivity array for a layer (from sens.npy in patterns dir) ----
 // Returns empty vector if not found.
+// min_norm: floor of [min_norm, 1.0] normalization range (matches SENS_NORM_MIN in env.sh).
+// NOTE: only called for the raw binary _sens.npy fallback path.  The primary
+// _sens_py.npy path (pre-normalized by export_sensitivity.py) is loaded directly
+// in process_layer() without going through this function.
 static std::vector<float> load_sensitivity(
     const std::string& sens_npy_path,
-    const std::vector<int64_t>* perm  // permutation (from perm_file) or nullptr
+    const std::vector<int64_t>* perm,  // permutation (from perm_file) or nullptr
+    float min_norm = 0.5f
 ) {
     if (!fs::exists(sens_npy_path)) return {};
 
@@ -156,13 +168,13 @@ static std::vector<float> load_sensitivity(
         sens = std::move(s2);
     }
 
-    // Normalize to [0.5, 1.0] — mirrors ecc_embed.py line 88:
-    //   sens_arr = 0.5 + 0.5 * (sens_arr / max_val)
-    // Without this, non-sensitive weights carry 0.0 cost (completely free to flip),
-    // while Python assigns them a baseline cost of 0.5.
+    // Normalize to [min_norm, 1.0] — mirrors ecc_embed.py _load_layer_sensitivity():
+    //   sens_arr = min_norm + (1 - min_norm) * (sens_arr / max_val)
+    // Called only for the raw binary _sens.npy fallback (binary {0,1} indicators),
+    // so min_norm=0.5 gives {0.5, 1.0} which matches the original behavior.
     float max_val = *std::max_element(sens.begin(), sens.end());
     if (max_val > 0.0f) {
-        for (auto& v : sens) v = 0.5f + 0.5f * (v / max_val);
+        for (auto& v : sens) v = min_norm + (1.0f - min_norm) * (v / max_val);
     } else {
         std::fill(sens.begin(), sens.end(), 1.0f);  // all-zero fallback → uniform weight
     }
@@ -207,7 +219,8 @@ static std::vector<float> load_dense_sensitivity(
             auto dense = npy_load_float32(sens_path);
             float max_val = dense.empty() ? 0.0f : *std::max_element(dense.begin(), dense.end());
             if (max_val > 0.0f) {
-                for (auto& v : dense) v = 0.5f + 0.5f * (v / max_val);
+                for (auto& v : dense)
+                    v = args.sens_norm_min + (1.0f - args.sens_norm_min) * (v / max_val);
             } else {
                 std::fill(dense.begin(), dense.end(), 1.0f);
             }
@@ -224,14 +237,16 @@ static std::vector<float> load_dense_sensitivity(
 
 // ---- Re-permute a dense sensitivity array for one candidate pattern ----------
 // sens_vec[k] = dense[perm_vec[k]]
+// min_norm is used as the out-of-bounds fallback (consistent with normalization floor).
 static std::vector<float> remap_sensitivity(
     const std::vector<float>&   dense,
-    const std::vector<int64_t>& perm_vec)
+    const std::vector<int64_t>& perm_vec,
+    float                       min_norm = 0.5f)
 {
     std::vector<float> sens_vec(perm_vec.size());
     for (size_t k = 0; k < perm_vec.size(); k++) {
         size_t idx = (size_t)perm_vec[k];
-        sens_vec[k] = (idx < dense.size()) ? dense[idx] : 0.5f;
+        sens_vec[k] = (idx < dense.size()) ? dense[idx] : min_norm;
     }
     return sens_vec;
 }
@@ -348,7 +363,8 @@ static void process_layer(
                 try { perm_vec = npy_load_int64(perm_path); } catch (...) {}
             }
 
-            sens_vec = load_sensitivity(sens_path, perm_vec.empty() ? nullptr : &perm_vec);
+            sens_vec = load_sensitivity(sens_path, perm_vec.empty() ? nullptr : &perm_vec,
+                                         args.sens_norm_min);
             if (!sens_vec.empty()) {
                 fprintf(stdout,
                     "  [sens] %s: WARNING — _sens_py.npy not found; using indicator "
@@ -407,7 +423,7 @@ static void process_layer_topk(
             try { perm_vec = npy_load_int64(perm_path); } catch (...) {}
         }
         if (!perm_vec.empty()) {
-            sens_vec = remap_sensitivity(dense_sens, perm_vec);
+            sens_vec = remap_sensitivity(dense_sens, perm_vec, args.sens_norm_min);
             sens_ptr = sens_vec.data();
         }
     } else if (args.no_sensitivity) {
@@ -500,7 +516,7 @@ static void run_greedy_selection(
                     try { perm_vec = npy_load_int64(perm_path); } catch (...) {}
                 }
                 if (!perm_vec.empty()) {
-                    sens_vec = remap_sensitivity(dense_sens, perm_vec);
+                    sens_vec = remap_sensitivity(dense_sens, perm_vec, args.sens_norm_min);
                     sens_ptr = sens_vec.data();
                 }
             }

@@ -52,13 +52,15 @@ _ALLOWED_APPROACHES = ('parfit', 'replace', 'no', 'parfix', 'search3', 'greedy')
 # Sensitivity loader
 # =============================================================================
 def _load_layer_sensitivity(sensitivity_dir, ds_lower, arch, quant_bits,
-                             layer_name, perm_arr, qmode="PTQ"):
+                             layer_name, perm_arr, qmode="PTQ", min_norm=0.5):
     """
     Build a normalized float64 sensitivity array aligned to the permuted weight order.
 
     sens_arr[i] = normalized taylor score for the weight at permuted position i.
     Weights absent from the CSV receive baseline = min(taylor) across the layer.
-    Scores are normalized by dividing by the layer max → range [0, 1].
+    Scores are normalized by dividing by the layer max (→ [0, 1]), then rescaled
+    into [min_norm, 1.0]. min_norm=0.0 → raw max-normalized scores; min_norm=1.0
+    → every weight = 1.0 (uniform, same effect as --no-sensitivity).
 
     Raises FileNotFoundError if the CSV does not exist.
     """
@@ -85,7 +87,7 @@ def _load_layer_sensitivity(sensitivity_dir, ds_lower, arch, quant_bits,
 
     max_val = float(sens_arr.max())
     if max_val > 0.0:
-        sens_arr = 0.5 + 0.5 * (sens_arr / max_val)   # normalize to [0.5, 1]
+        sens_arr = min_norm + (1.0 - min_norm) * (sens_arr / max_val)   # normalize to [min_norm, 1]
     else:
         sens_arr[:] = 1.0        # uniform fallback when all scores are zero
 
@@ -346,7 +348,7 @@ def run_layer(layer_name, entry, args, t_value, chunk_size, message_parity_size,
             try:
                 sens_arr, sens_dict, baseline = _load_layer_sensitivity(
                     args.sensitivity_dir, ds_lower, args.arch, args.quant_bits,
-                    layer_name, perm_arr, args.qmode,
+                    layer_name, perm_arr, args.qmode, args.sens_norm_min,
                 )
             except FileNotFoundError as exc:
                 if args.approach == 'no':
@@ -418,7 +420,7 @@ def main():
                     choices=["CIFAR10", "CIFAR100", "IMAGENET"])
     ap.add_argument("--arch",         required=True,
                     choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0"])
-    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 8, 16])
+    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 6, 8, 16])
     ap.add_argument("--t-value",      required=True, type=int)
     ap.add_argument("--approach",     default="parfix", choices=list(_ALLOWED_APPROACHES))
     ap.add_argument("--codeword",     default=63,    type=int, choices=[63, 127, 255])
@@ -433,6 +435,10 @@ def main():
     ap.add_argument("--no-sensitivity", action="store_true", default=False,
                     help="Disable sensitivity weighting: all bucket weights = 1.0 "
                          "(controlled by EMBED_SENSITIVITY=false in env.sh)")
+    ap.add_argument("--sens-norm-min", type=float, default=0.5,
+                    help="Floor of the Taylor-score normalization range [min,1.0] "
+                         "(controlled by SENS_NORM_MIN in env.sh). 0.0 = raw "
+                         "max-normalized scores; 1.0 = uniform (no sensitivity effect).")
     ap.add_argument("--qmode", default="PTQ", choices=["PTQ", "QAT"],
                     help="PTQ or QAT weight checkpoints (selects the patterns/ "
                          "and sensitivity/ subdirectory).")
@@ -449,6 +455,8 @@ def main():
                          "best_pattern_selection.json (written by --approach greedy, "
                          "read by --approach search3 — both require --top-patterns-dir).")
     args = ap.parse_args()
+    if not (0.0 <= args.sens_norm_min <= 1.0):
+        raise ValueError(f"--sens-norm-min must be in [0.0, 1.0], got {args.sens_norm_min}")
 
     t_value           = args.t_value
     message_parity_size = args.codeword

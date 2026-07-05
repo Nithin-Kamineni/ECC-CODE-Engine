@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils.eval_functions import (
     pick_device, get_dataloaders, build_model, evaluate,
     dequantize_tensor, dequantize_per_channel_conv, strip_prefix_from_state_dict,
+    load_qat_state_dict,
 )
 
 
@@ -100,7 +101,7 @@ def main():
     ap.add_argument("--dataset",         required=True, choices=["CIFAR10", "CIFAR100", "IMAGENET"])
     ap.add_argument("--arch",            required=True,
                     choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0"])
-    ap.add_argument("--quant-bits",      required=True, type=int, choices=[4, 8, 16])
+    ap.add_argument("--quant-bits",      required=True, type=int, choices=[4, 6, 8, 16])
     ap.add_argument("--t-value",         required=True, type=int)
     ap.add_argument("--approach",        required=True)
     ap.add_argument("--codeword",        required=True, type=int)
@@ -118,6 +119,8 @@ def main():
                     help="Protect only layers above this grad_norm_score percentile (0-1)")
     ap.add_argument("--max-protect",     type=float, default=0.02,
                     help="Hard cap: at most this fraction of total weights replaced")
+    ap.add_argument("--qmode",           default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ or QAT — selects embeddedECC/models/sensitivity subdirectories and checkpoint format.")
     args = ap.parse_args()
 
     ds_lower  = args.dataset.lower()
@@ -125,23 +128,29 @@ def main():
     m_tag     = f"M{args.codeword}_t{args.t_value}"
 
     ecc_model_path  = os.path.join(
-        args.ecc_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.ecc_dir, ds_lower, args.arch, args.qmode, bit_label,
         m_tag, args.approach, "ECC_Embedded_model.pth",
     )
-    orig_model_path = os.path.join(
-        args.models_dir, ds_lower, args.arch, "PTQ",
-        f"model_int{args.quant_bits}_ptq.pth",
-    )
+    if args.qmode == "QAT":
+        orig_model_path = os.path.join(
+            args.models_dir, ds_lower, args.arch, "QAT",
+            f"model_int{args.quant_bits}_qat.pth",
+        )
+    else:
+        orig_model_path = os.path.join(
+            args.models_dir, ds_lower, args.arch, "PTQ",
+            f"model_int{args.quant_bits}_ptq.pth",
+        )
     sens_json_path  = os.path.join(
-        args.sensitivity_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.sensitivity_dir, ds_lower, args.arch, args.qmode, bit_label,
         f"sensitivity_{ds_lower}_{args.arch}_int{args.quant_bits}.json",
     )
     layer_csv_path  = os.path.join(
-        args.sensitivity_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.sensitivity_dir, ds_lower, args.arch, args.qmode, bit_label,
         f"layer_summary_{ds_lower}_{args.arch}_int{args.quant_bits}_grad_norm.csv",
     )
 
-    print(f"[7-SensitiveAccuracyTesting] {args.dataset}/{args.arch}/{bit_label}/{m_tag}/{args.approach}")
+    print(f"[7-SensitiveAccuracyTesting] {args.dataset}/{args.arch}/{args.qmode}/{bit_label}/{m_tag}/{args.approach}")
 
     if not os.path.exists(ecc_model_path):
         print(f"  [skip] ECC model not found: {ecc_model_path}")
@@ -181,10 +190,11 @@ def main():
     orig_ckpt = torch.load(orig_model_path, map_location="cpu")
 
     # ---- Replace ECC weights with originals for protected layers ----
+    sd_key = "state_dict" if args.qmode == "QAT" else "qstate_dict"
     replaced = 0
     for layer in protected_layers:
-        if layer in ecc_ckpt["qstate_dict"] and layer in orig_ckpt["qstate_dict"]:
-            ecc_ckpt["qstate_dict"][layer] = orig_ckpt["qstate_dict"][layer]
+        if layer in ecc_ckpt[sd_key] and layer in orig_ckpt[sd_key]:
+            ecc_ckpt[sd_key][layer] = orig_ckpt[sd_key][layer]
             replaced += 1
         else:
             print(f"  [warn] Layer {layer!r} not found in one of the checkpoints — skipped")
@@ -205,14 +215,17 @@ def main():
     )
 
     model = build_model(args.arch, nc, use_pretrained=False).to(device)
-    _dequantize_and_load(model, ecc_ckpt, device)
+    if args.qmode == "QAT":
+        load_qat_state_dict(model, ecc_ckpt, device)
+    else:
+        _dequantize_and_load(model, ecc_ckpt, device)
 
     top1, top5 = evaluate(model, test_loader, device)
     print(f"  [result] Top-1 = {top1:.4f}%  Top-5 = {top5:.4f}%")
 
     # ---- Save results ----
     out_dir = (Path(args.results_dir) / ds_lower / args.arch
-               / "PTQ" / bit_label / m_tag / args.approach)
+               / args.qmode / bit_label / m_tag / args.approach)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "sensitive_accuracy.json"
 

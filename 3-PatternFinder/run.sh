@@ -70,6 +70,7 @@ echo "[3-PatternFinder/run.sh] DATASETS=${DATASETS}"
 echo "[3-PatternFinder/run.sh] ARCHS=${ARCHS}"
 echo "[3-PatternFinder/run.sh] QUANT_LEVELS=${QUANT_LEVELS}"
 echo "[3-PatternFinder/run.sh] GROUP_SIZE=${GROUP_SIZE}  MAX_SENS=${MAX_SENS}  TOP_SENSITIVE=${TOP_SENSITIVE}  SENS_THRESHOLD=${SENS_THRESHOLD}  MAX_STRIDE=${MAX_STRIDE}"
+echo "[3-PatternFinder/run.sh] DISABLE_PATTERN_FIND=${DISABLE_PATTERN_FIND}  RANDOM_PATTERN_FIND=${RANDOM_PATTERN_FIND:-false}"
 echo "[3-PatternFinder/run.sh] PATTERNS_DIR=${PATTERNS_DIR}"
 echo "[3-PatternFinder/run.sh] QAT_ENABLED=${QAT_ENABLED}  QMODE=${QMODE}  TOP_PATTERNS=${TOP_PATTERNS}"
 
@@ -131,9 +132,11 @@ for DS in $DATASETS; do
             echo "  MODEL:     ${MODEL_FLAG:-<none>}"
             echo "========================================================"
 
-            # Choose full interleaver search or identity-permutation bypass
+            # Choose search mode: identity bypass, random stride, or full search
             if [ "${DISABLE_PATTERN_FIND}" = "true" ]; then
                 SEARCH_FLAG="--identity-perm"
+            elif [ "${RANDOM_PATTERN_FIND:-false}" = "true" ]; then
+                SEARCH_FLAG="--random-stride"
             else
                 SEARCH_FLAG="--run-search"
             fi

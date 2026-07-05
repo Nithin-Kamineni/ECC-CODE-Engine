@@ -1,0 +1,7 @@
+expand this ablasian study to involve other methods including:
+search3 (already present)
+greedy
+MILP
+Value Aware Parity
+Virtual Parity
+Opertunistic Paritys

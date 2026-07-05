@@ -19,7 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils.eval_functions import (
-    pick_device, get_dataloaders, build_model, load_quantized_into_model, evaluate,
+    pick_device, get_dataloaders, build_model, load_quantized_into_model,
+    load_qat_state_dict, evaluate,
 )
 
 
@@ -28,12 +29,14 @@ def main():
     ap.add_argument("--dataset",      required=True, choices=["CIFAR10", "CIFAR100", "IMAGENET"])
     ap.add_argument("--arch",         required=True,
                     choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0"])
-    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 8, 16])
+    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 6, 8, 16])
     ap.add_argument("--t-value",      required=True, type=int)
     ap.add_argument("--approach",     required=True)
     ap.add_argument("--codeword",     required=True, type=int)
     ap.add_argument("--ecc-dir",      required=True)
     ap.add_argument("--results-dir",  required=True)
+    ap.add_argument("--qmode",        default="PTQ", choices=["PTQ", "QAT"],
+                    help="PTQ or QAT — selects embeddedECC subdirectory and checkpoint format.")
     ap.add_argument("--imagenet-root", default=None)
     ap.add_argument("--batch-size",   type=int, default=256)
     ap.add_argument("--workers",      type=int, default=4)
@@ -44,11 +47,11 @@ def main():
     m_tag     = f"M{args.codeword}_t{args.t_value}"
 
     ecc_model_path = os.path.join(
-        args.ecc_dir, ds_lower, args.arch, "PTQ", bit_label,
+        args.ecc_dir, ds_lower, args.arch, args.qmode, bit_label,
         m_tag, args.approach, "ECC_Embedded_model.pth",
     )
 
-    print(f"[6-BaseAccuracyTesting] {args.dataset}/{args.arch}/{bit_label}/{m_tag}/{args.approach}")
+    print(f"[6-BaseAccuracyTesting] {args.dataset}/{args.arch}/{args.qmode}/{bit_label}/{m_tag}/{args.approach}")
 
     if not os.path.exists(ecc_model_path):
         print(f"  [skip] ECC model not found: {ecc_model_path}")
@@ -67,15 +70,19 @@ def main():
     )
 
     model = build_model(args.arch, nc, use_pretrained=False).to(device)
-    meta  = load_quantized_into_model(
-        model, args.dataset, args.arch, args.quant_bits, "ptq",
-        map_location=device, weight_argument=ecc_model_path,
-    )
+    if args.qmode == "QAT":
+        ckpt = torch.load(ecc_model_path, map_location=device)
+        meta = load_qat_state_dict(model, ckpt, device)
+    else:
+        meta = load_quantized_into_model(
+            model, args.dataset, args.arch, args.quant_bits, "ptq",
+            map_location=device, weight_argument=ecc_model_path,
+        )
 
     top1, top5 = evaluate(model, test_loader, device)
     print(f"  [result] Top-1 = {top1:.4f}%  Top-5 = {top5:.4f}%")
 
-    out_dir = Path(args.results_dir) / ds_lower / args.arch / "PTQ" / bit_label / m_tag / args.approach
+    out_dir = Path(args.results_dir) / ds_lower / args.arch / args.qmode / bit_label / m_tag / args.approach
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "accuracy.json"
 

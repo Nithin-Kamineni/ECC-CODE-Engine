@@ -345,7 +345,7 @@ def main():
     ap.add_argument("--dataset",      required=True, choices=["CIFAR10", "CIFAR100", "IMAGENET"])
     ap.add_argument("--arch",         required=True,
                     choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0"])
-    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 8, 16])
+    ap.add_argument("--quant-bits",   required=True, type=int, choices=[4, 6, 8, 16])
     ap.add_argument("--t-value",      required=True, type=int)
     ap.add_argument("--approach",     default="parfix",
                     choices=["parfit", "replace", "no", "parfix", "search3", "greedy"])

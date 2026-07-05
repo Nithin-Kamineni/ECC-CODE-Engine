@@ -58,6 +58,9 @@ NUMEL_THRESHOLD="${NUMEL_THRESHOLD:-5000}"
 SCORE_PERCENTILE="${SCORE_PERCENTILE:-0.0025}"
 MAX_PROTECT="${MAX_PROTECT:-0.05}"
 
+# ---- PTQ vs QAT (QMODE) is selected by QAT_ENABLED, mirroring 2/3/4/5/6. ----
+QMODE="$( [ "${QAT_ENABLED}" = "true" ] && echo QAT || echo PTQ )"
+
 echo "[7-SensitiveAccuracyTesting/run.sh] SIF=${SIF}"
 echo "[7-SensitiveAccuracyTesting/run.sh] T_VALUE=${T_VALUE}  (SLURM array task)"
 echo "[7-SensitiveAccuracyTesting/run.sh] EMBED_DATASETS=${EMBED_DATASETS}"
@@ -66,6 +69,7 @@ echo "[7-SensitiveAccuracyTesting/run.sh] EMBED_QUANT_BITS=${EMBED_QUANT_BITS}"
 echo "[7-SensitiveAccuracyTesting/run.sh] EMBED_APPROACH=${EMBED_APPROACH}  EMBED_CODEWORD=${EMBED_CODEWORD}"
 echo "[7-SensitiveAccuracyTesting/run.sh] NUMEL_THRESHOLD=${NUMEL_THRESHOLD}  SCORE_PERCENTILE=${SCORE_PERCENTILE}  MAX_PROTECT=${MAX_PROTECT}"
 echo "[7-SensitiveAccuracyTesting/run.sh] RESULTS_DIR=${RESULTS_DIR}"
+echo "[7-SensitiveAccuracyTesting/run.sh] QAT_ENABLED=${QAT_ENABLED}  QMODE=${QMODE}"
 
 # ---- Loop over all dataset × arch × quant-bits combinations ----
 for DS in $EMBED_DATASETS; do
@@ -73,7 +77,7 @@ for DS in $EMBED_DATASETS; do
         for BITS in $EMBED_QUANT_BITS; do
             DS_LOWER="${DS,,}"
             BIT_LABEL="${BITS}-bit"
-            ECC_MODEL="${EMBEDDED_ECC_DIR}/${DS_LOWER}/${ARC}/PTQ/${BIT_LABEL}/M${EMBED_CODEWORD}_t${T_VALUE}/${EMBED_APPROACH}/ECC_Embedded_model.pth"
+            ECC_MODEL="${EMBEDDED_ECC_DIR}/${DS_LOWER}/${ARC}/${QMODE}/${BIT_LABEL}/M${EMBED_CODEWORD}_t${T_VALUE}/${EMBED_APPROACH}/ECC_Embedded_model.pth"
 
             if [ ! -f "${ECC_MODEL}" ]; then
                 echo "[skip] ECC model not found: ${ECC_MODEL}"
@@ -81,7 +85,7 @@ for DS in $EMBED_DATASETS; do
             fi
 
             echo "========================================================"
-            echo "[7-SensitiveAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE}"
+            echo "[7-SensitiveAccuracyTesting] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE}"
             echo "========================================================"
 
             IMAGENET_ARG=""
@@ -107,9 +111,10 @@ for DS in $EMBED_DATASETS; do
                     --numel-threshold   "${NUMEL_THRESHOLD}" \
                     --score-percentile  "${SCORE_PERCENTILE}" \
                     --max-protect       "${MAX_PROTECT}" \
+                    --qmode             "${QMODE}" \
                     ${IMAGENET_ARG}
 
-            echo "[7-SensitiveAccuracyTesting] ${DS}/${ARC}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
+            echo "[7-SensitiveAccuracyTesting] ${DS}/${ARC}/${QMODE}/${BIT_LABEL}/t=${T_VALUE} done (exit $?)"
         done
     done
 done

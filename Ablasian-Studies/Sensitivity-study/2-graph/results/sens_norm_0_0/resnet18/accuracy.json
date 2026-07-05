@@ -1,0 +1,10 @@
+{
+  "dataset": "IMAGENET",
+  "arch": "resnet18",
+  "bits": 8,
+  "t": 4,
+  "approach": "search3",
+  "codeword": 63,
+  "top1": 55.614,
+  "top5": 79.554
+}

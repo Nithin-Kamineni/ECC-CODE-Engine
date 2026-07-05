@@ -275,6 +275,12 @@ def load_quantized_into_model(model: nn.Module, dataset: str, arch: str,
     model.load_state_dict(dsd, strict=True)
     return payload["meta"]
 
+def load_qat_state_dict(model: nn.Module, ckpt: Dict[str, Any], map_location: torch.device):
+    """Load an already-dequantized QAT checkpoint's state_dict directly (no rescaling needed)."""
+    dsd = strip_prefix_from_state_dict(ckpt["state_dict"])
+    model.load_state_dict(dsd, strict=True)
+    return ckpt["meta"]
+
 @torch.no_grad()
 def evaluate(model, loader, device):
     model.eval()
