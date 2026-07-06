@@ -41,12 +41,12 @@ ARCHS="${ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 DEVICE="${DEVICE:-cuda}"
 # QUANTIZE_BITS="${QUANTIZE_BITS:-8 4}"
-QUANTIZE_BITS="${QUANTIZE_BITS:-6}"
+QUANTIZE_BITS="${QUANTIZE_BITS:-6 8}"
 # QUANT_LEVELS — full sweep used in 2-Sensitivity and 3-PatternFinder loops.
 # 32 = float32 baseline (no quantization); 16/8/4 = PTQ levels.
 # Scripts map 32 → float32 label internally. Modify freely.
 # QUANT_LEVELS="${QUANT_LEVELS:-8 4}"
-QUANT_LEVELS="${QUANT_LEVELS:-6}"
+QUANT_LEVELS="${QUANT_LEVELS:-6 8}"
 TOP_LAYERS="${TOP_LAYERS:-999}"
 TOP_PER_LAYER="${TOP_PER_LAYER:-30000}"
 LAYER_METRIC="${LAYER_METRIC:-grad_norm}"
@@ -54,11 +54,11 @@ MAX_BATCHES="${MAX_BATCHES:-8}"
 
 # ---- PatternFinder parameters ----
 GROUP_SIZE="${GROUP_SIZE:-8}"
-MAX_SENS="${MAX_SENS:-3}"
-TOP_SENSITIVE="${TOP_SENSITIVE:-300}"
+MAX_SENS="${MAX_SENS:-4}"
+TOP_SENSITIVE="${TOP_SENSITIVE:-150}"
 # SENS_THRESHOLD: Taylor score cutoff — weights above this are counted as sensitive.
 # The final sensitive set = max(threshold_count, TOP_SENSITIVE).
-SENS_THRESHOLD="${SENS_THRESHOLD:-0.001}"
+SENS_THRESHOLD="${SENS_THRESHOLD:-0.005}"
 # MAX_STRIDE: Maximum allowed stride s in perm[k]=(k*s) mod N.
 # Set equal to your hardware's burst-fetch size (in number of weights).
 # Strides s > MAX_STRIDE are never evaluated — keeps all accesses within one fetch tile.
@@ -83,7 +83,7 @@ DISABLE_PATTERN_FIND="${DISABLE_PATTERN_FIND:-false}"
 # ---- Top-K stride patterns saved per layer by 3-PatternFinder ----
 # 4-EmbeddingECC scores all K candidates (greedy distortion) and picks the best.
 # When DISABLE_PATTERN_FIND=true, only 1 (identity) pattern is saved regardless.
-TOP_PATTERNS="${TOP_PATTERNS:-10}"
+TOP_PATTERNS="${TOP_PATTERNS:-20}"
 # ---- Where per-layer best-pattern selections (from greedy scoring) are saved ----
 BEST_PATTERNS_DIR="${BEST_PATTERNS_DIR:-${ARTIFACTS_DIR}/best_patterns}"
 
@@ -99,9 +99,10 @@ SENS_NORM_MIN="${SENS_NORM_MIN:-0.5}"  # floor of Taylor-score normalization ran
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
 # EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
-EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
+EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50}"
+# EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
 # EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
-EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-6}"   # quantized levels only (not float32)
+EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-6 8}"   # quantized levels only (not float32)
 EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
 EMBED_CODEWORD="${EMBED_CODEWORD:-63}"         # M value in M{codeword}_t{tval} path
 EMBED_WORKERS="${EMBED_WORKERS:-8}"

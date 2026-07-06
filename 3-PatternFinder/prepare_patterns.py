@@ -252,9 +252,10 @@ def main():
                     help="Default inferred from filename (cifar10->10, cifar100->100).")
     ap.add_argument("--score", default="taylor",
                     choices=["taylor", "fisher", "magnitude"])
-    ap.add_argument("--sensitive-mode", default="indicator",
+    ap.add_argument("--sensitive-mode", default="value",
                     choices=["indicator", "value"],
-                    help="indicator: selected=1.0; value: selected=raw score.")
+                    help="value (default): sens[i]=raw Taylor score for weighted search objective. "
+                         "indicator: sens[i]=1.0 (legacy binary mode).")
     ap.add_argument("--shapes-json", default=None,
                     help="Optional JSON {layer_name: numel} to override sizing.")
 
@@ -412,7 +413,8 @@ def main():
             results = fp.search(sens, group_size=args.group_size,
                                 threshold=thr, max_sens=args.max_sens,
                                 max_stride=args.max_stride,
-                                verbose=False)
+                                verbose=False,
+                                top_k=top_k)
             baseline = fp.evaluate(sens, np.arange(N), args.group_size,
                                    thr, args.max_sens)
             best = results[0]
