@@ -390,8 +390,8 @@ def main():
             print(f"[data] no 'train/' subfolder found at {ir}; "
                   f"stratified 80/20 split of val set (no overlap between "
                   f"QAT-finetune and eval).")
-            tf_tr = TQ.build_transforms("imagenet", train=True)
-            tf_te = TQ.build_transforms("imagenet", train=False)
+            tf_tr = TQ.build_transforms("imagenet", train=True, arch=args.arch)
+            tf_te = TQ.build_transforms("imagenet", train=False, arch=args.arch)
             val_dir = os.path.join(ir, "val") if has_val else ir
             # Two dataset instances on the SAME folder with different transforms.
             full_tr = TQ._safe_image_folder(val_dir, transform=tf_tr)
@@ -428,12 +428,12 @@ def main():
         else:
             train_loader, test_loader, nc, _ = TQ.get_dataloaders(
                 args.dataset, args.data_root, args.batch_size, args.workers,
-                dist_mode=False, imagenet_root=args.imagenet_root,
+                dist_mode=False, imagenet_root=args.imagenet_root, arch=args.arch,
             )
     else:
         train_loader, test_loader, nc, _ = TQ.get_dataloaders(
             args.dataset, args.data_root, args.batch_size, args.workers,
-            dist_mode=False, imagenet_root=args.imagenet_root,
+            dist_mode=False, imagenet_root=args.imagenet_root, arch=args.arch,
         )
     print(f"[data]      train={len(train_loader.dataset)}  test={len(test_loader.dataset)}  nc={nc}")
 

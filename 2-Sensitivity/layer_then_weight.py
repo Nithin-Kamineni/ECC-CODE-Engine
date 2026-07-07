@@ -405,10 +405,10 @@ def run_one_arch(arch: str, args):
     device = TQ.pick_device(args.device, local_rank=0)
 
     _, _, nc = TQ.get_datasets(args.dataset, args.data_root,
-                                args.imagenet_root or None)
+                                args.imagenet_root or None, arch=arch)
     _, test_loader, _, _ = TQ.get_dataloaders(
         args.dataset, args.data_root, args.batch_size, args.workers,
-        dist_mode=False, imagenet_root=args.imagenet_root or None)
+        dist_mode=False, imagenet_root=args.imagenet_root or None, arch=arch)
 
     base_tag = f"{args.dataset.lower()}_{arch.lower()}"
     out_dir  = args.out_dir

@@ -254,21 +254,28 @@ def cifar_mean_std(dataset: str):
         return [0.4914,0.4822,0.4465],[0.2470,0.2435,0.2616]
 
 
-def build_transforms(dataset: str, train: bool):
+def build_transforms(dataset: str, train: bool, arch: str = None):
     ds = dataset.lower()
     if ds == "imagenet":
+        # Xception (loaded via timm) expects 299x299 input and Inception-style
+        # [-1,1] normalization, not the standard 224x224 / ImageNet-stats used
+        # by every other (torchvision-native) arch in this pipeline.
+        if arch is not None and arch.lower() == "xception":
+            mean, std, crop, resize = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], 299, 333
+        else:
+            mean, std, crop, resize = IMNET_MEAN, IMNET_STD, 224, 256
         if train:
             return transforms.Compose([
-                transforms.RandomResizedCrop(224),
+                transforms.RandomResizedCrop(crop),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize(IMNET_MEAN, IMNET_STD),
+                transforms.Normalize(mean, std),
             ])
         return transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize(resize),
+            transforms.CenterCrop(crop),
             transforms.ToTensor(),
-            transforms.Normalize(IMNET_MEAN, IMNET_STD),
+            transforms.Normalize(mean, std),
         ])
 
     if ds in ("cifar10","cifar100"):
@@ -327,10 +334,10 @@ def _safe_image_folder(root: str, transform=None):
     return _Filtered(root, transform=transform)
 
 
-def get_datasets(dataset: str, data_root: str, imagenet_root: Optional[str]=None):
+def get_datasets(dataset: str, data_root: str, imagenet_root: Optional[str]=None, arch: str = None):
     ds = dataset.lower()
-    tf_tr = build_transforms(ds, train=True)
-    tf_te = build_transforms(ds, train=False)
+    tf_tr = build_transforms(ds, train=True, arch=arch)
+    tf_te = build_transforms(ds, train=False, arch=arch)
 
     if ds == "cifar10":
         ok = _try_torchvision_cifar(data_root, CIFAR10_TGZ_URL, CIFAR10_TGZ_MD5,
@@ -375,8 +382,8 @@ def get_datasets(dataset: str, data_root: str, imagenet_root: Optional[str]=None
 
 
 def get_dataloaders(dataset, data_root, batch_size, num_workers,
-                    dist_mode, imagenet_root=None, seed=42):
-    tr_set, te_set, nc = get_datasets(dataset, data_root, imagenet_root)
+                    dist_mode, imagenet_root=None, seed=42, arch=None):
+    tr_set, te_set, nc = get_datasets(dataset, data_root, imagenet_root, arch=arch)
     sampler = DistributedSampler(tr_set, shuffle=True, seed=seed) if dist_mode else None
     tr_loader = DataLoader(tr_set, batch_size=batch_size,
                            shuffle=(sampler is None), sampler=sampler,
@@ -421,10 +428,22 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
         "efficientnet_b4": getattr(models, "EfficientNet_B4_Weights", None).IMAGENET1K_V1 if hasattr(models, "EfficientNet_B4_Weights") else None,
         "convnext_base":   getattr(models, "ConvNeXt_Base_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Base_Weights") else None,
         "convnext_large":  getattr(models, "ConvNeXt_Large_Weights",  None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Large_Weights") else None,
+        "convnext_tiny":   getattr(models, "ConvNeXt_Tiny_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Tiny_Weights") else None,
+        "densenet121":     getattr(models, "DenseNet121_Weights",     None).IMAGENET1K_V1 if hasattr(models, "DenseNet121_Weights") else None,
+        "squeezenet1_1":   getattr(models, "SqueezeNet1_1_Weights",   None).IMAGENET1K_V1 if hasattr(models, "SqueezeNet1_1_Weights") else None,
     }
 
     if a == "mlp":
         return CIFARMLP(num_classes)
+
+    # Xception is not in torchvision; load via timm (auto-installed if missing).
+    if a == "xception":
+        try:
+            import timm
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "timm"])
+            import timm
+        return timm.create_model("xception", pretrained=bool(use_pretrained), num_classes=num_classes)
 
     ctor = getattr(models, a, None)
     if ctor is None:
@@ -444,9 +463,27 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
                 in_f = last.in_features
                 new_seq = list(m.classifier[:-1]) + [nn.Linear(in_f, num_classes)]
                 m.classifier = nn.Sequential(*new_seq)
+            else:
+                # SqueezeNet: classifier is Sequential(Dropout, Conv2d, ReLU,
+                # AdaptiveAvgPool2d) -- the Conv2d head isn't the last element.
+                for i, layer in enumerate(m.classifier):
+                    if isinstance(layer, nn.Conv2d) and layer.out_channels != num_classes:
+                        m.classifier[i] = nn.Conv2d(
+                            layer.in_channels, num_classes,
+                            kernel_size=layer.kernel_size,
+                            stride=layer.stride,
+                        )
+                        break
         elif isinstance(m.classifier, nn.Linear):
             if m.classifier.out_features != num_classes:
                 m.classifier = nn.Linear(m.classifier.in_features, num_classes)
+        elif isinstance(m.classifier, nn.Conv2d):
+            if m.classifier.out_channels != num_classes:
+                m.classifier = nn.Conv2d(
+                    m.classifier.in_channels, num_classes,
+                    kernel_size=m.classifier.kernel_size,
+                    stride=m.classifier.stride,
+                )
 
     return m
 
@@ -672,7 +709,7 @@ def cmd_train(args):
 
     train_loader, test_loader, nc, train_sampler = get_dataloaders(
         args.dataset, args.data_root, args.batch_size, args.workers,
-        use_ddp, imagenet_root=args.imagenet_root,
+        use_ddp, imagenet_root=args.imagenet_root, arch=args.arch,
     )
 
     model = build_model(args.arch, nc, use_pretrained=bool(args.use_pretrained)).to(device)
@@ -739,7 +776,7 @@ def cmd_train(args):
 
 
 def cmd_quantize(args):
-    _, _, nc = get_datasets(args.dataset, args.data_root, args.imagenet_root)
+    _, _, nc = get_datasets(args.dataset, args.data_root, args.imagenet_root, arch=args.arch)
     use_pt = bool(getattr(args, "use_pretrained", 0))
     model = build_model(args.arch, nc, use_pretrained=use_pt)
 
@@ -768,7 +805,7 @@ def cmd_eval(args):
 
     _, test_loader, nc, _ = get_dataloaders(
         args.dataset, args.data_root, args.batch_size, args.workers,
-        dist_mode=False, imagenet_root=getattr(args, "imagenet_root", None),
+        dist_mode=False, imagenet_root=getattr(args, "imagenet_root", None), arch=args.arch,
     )
 
     model = build_model(args.arch, nc, use_pretrained=bool(args.use_pretrained)).to(device)
@@ -789,10 +826,10 @@ def cmd_eval(args):
 
 @torch.no_grad()
 def quick_eval_for_inspector(model, dataset, data_root, imagenet_root,
-                             device, workers, batch_size):
+                             device, workers, batch_size, arch=None):
     _, test_loader, _, _ = get_dataloaders(
         dataset, data_root, batch_size, workers,
-        dist_mode=False, imagenet_root=imagenet_root,
+        dist_mode=False, imagenet_root=imagenet_root, arch=arch,
     )
     return evaluate(model, test_loader, device)
 
@@ -811,7 +848,7 @@ def show_float_weights(model, layer_filter=None, max_vals=16):
 
 def cmd_inspect(args):
     device = pick_device(args.device if hasattr(args, "device") else "cuda", local_rank=0)
-    _, _, nc = get_datasets(args.dataset, args.data_root, args.imagenet_root)
+    _, _, nc = get_datasets(args.dataset, args.data_root, args.imagenet_root, arch=args.arch)
     model = build_model(args.arch, nc, use_pretrained=bool(args.use_pretrained)).to(device)
 
     qinfo: Dict[str, Tuple[torch.Tensor, Optional[Dict[str, Any]]]] = {}
@@ -858,6 +895,7 @@ def cmd_inspect(args):
             device=device,
             workers=args.workers if hasattr(args, "workers") else 2,
             batch_size=args.batch_size if hasattr(args, "batch_size") else 256,
+            arch=args.arch,
         )
         print(f"\n[Test accuracy] {acc} on {args.dataset}")
 
@@ -909,7 +947,8 @@ def build_parser():
 
     arch_choices = ["resnet18","resnet34","resnet50","resnet101","vgg16","alexnet",
                     "mobilenet_v2","efficientnet_b0","efficientnet_b1","efficientnet_b2",
-                    "efficientnet_b3","efficientnet_b4","convnext_base","convnext_large","mlp"]
+                    "efficientnet_b3","efficientnet_b4","convnext_base","convnext_large","mlp",
+                    "convnext_tiny","densenet121","squeezenet1_1","xception"]
     ds_choices = ["CIFAR10", "CIFAR100", "MNIST", "IMAGENET"]
 
     tr = sub.add_parser("train")

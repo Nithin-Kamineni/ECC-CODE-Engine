@@ -31,7 +31,7 @@
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:l4:1
 #SBATCH --mem=32gb
 #SBATCH --time=48:00:00
@@ -86,6 +86,7 @@ for DS in $DATASETS; do
                 python3 "${SCRIPT_DIR}/test-Quantizer.py" \
                     --data-root       "${DATASET_DIR}" \
                     --artifacts-root  "${ARTIFACTS_DIR}" \
+                    --workers         "${WORKERS}" \
                     train \
                     --dataset         "${DS}" \
                     --arch            "${ARC}" \
@@ -114,8 +115,12 @@ if [ "${QAT_ENABLED}" = "true" ]; then
     echo "[1-Quantization/run.sh] QAT_EPOCHS=${QAT_EPOCHS}  QAT_LR=${QAT_LR}  QAT_SKIP_FIRST_LAST=${QAT_SKIP_FIRST_LAST}"
     for DS in $DATASETS; do
         for ARC in $ARCHS; do
+            # Per-arch overrides (env.sh) fall back to the global BATCH_SIZE /
+            # QAT_SKIP_FIRST_LAST above for any arch not listed there.
+            ARC_BATCH_SIZE="${ARCH_BATCH_SIZE[$ARC]:-$BATCH_SIZE}"
+            ARC_SKIP_FIRST_LAST="${ARCH_SKIP_FIRST_LAST[$ARC]:-$QAT_SKIP_FIRST_LAST}"
             for BITS in $QUANTIZE_BITS; do
-                echo "[1-Quantization] QAT fine-tuning ${ARC} on ${DS} @ ${BITS}-bit ..."
+                echo "[1-Quantization] QAT fine-tuning ${ARC} on ${DS} @ ${BITS}-bit (batch_size=${ARC_BATCH_SIZE}, skip_first_last=${ARC_SKIP_FIRST_LAST}) ..."
                 singularity exec \
                     --nv \
                     --bind /blue \
@@ -130,8 +135,9 @@ if [ "${QAT_ENABLED}" = "true" ]; then
                         --bits            "${BITS}" \
                         --epochs          "${QAT_EPOCHS}" \
                         --lr              "${QAT_LR}" \
-                        --skip-first-last "${QAT_SKIP_FIRST_LAST}" \
-                        --batch-size      "${BATCH_SIZE}"
+                        --skip-first-last "${ARC_SKIP_FIRST_LAST}" \
+                        --batch-size      "${ARC_BATCH_SIZE}" \
+                        --workers         "${WORKERS}"
             done
         done
     done

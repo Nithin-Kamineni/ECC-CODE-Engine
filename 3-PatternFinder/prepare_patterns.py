@@ -179,7 +179,18 @@ def get_numel_map(layers_needed, arch, num_classes, shapes_json):
             user_map = json.load(f)
         return {L: int(user_map[L]) for L in layers_needed if L in user_map}, "shapes-json"
 
-    # 2) torchvision model
+    # 2) xception (not in torchvision) via timm
+    if arch.lower() == "xception":
+        try:
+            import timm
+            model = timm.create_model("xception", num_classes=num_classes)
+            m = {n: int(p.numel()) for n, p in model.named_parameters()}
+            return {L: m[L] for L in layers_needed if L in m}, "timm"
+        except Exception as e:
+            print(f"[numel] timm path unavailable ({type(e).__name__}: {e}); "
+                  f"falling back to built-in table.")
+
+    # 3) torchvision model
     try:
         import torch  # noqa
         import torchvision
@@ -196,7 +207,7 @@ def get_numel_map(layers_needed, arch, num_classes, shapes_json):
         print(f"[numel] torchvision path unavailable ({type(e).__name__}: {e}); "
               f"falling back to built-in table.")
 
-    # 3) built-in resnet18 table
+    # 4) built-in resnet18 table
     if arch.lower() == "resnet18":
         tbl = _resnet18_numel_table(num_classes)
         return {L: tbl[L] for L in layers_needed if L in tbl}, "builtin-resnet18"

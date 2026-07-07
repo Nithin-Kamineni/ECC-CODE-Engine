@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, math, time, argparse, random
+import os, math, time, argparse, random, subprocess, sys
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -22,10 +22,10 @@ def pick_device(arg_device: str, local_rank: int) -> torch.device:
         return torch.device(f"cuda:{local_rank}")
     return torch.device("cpu")
 
-def get_datasets(dataset: str, data_root: str, imagenet_root: Optional[str]=None):
+def get_datasets(dataset: str, data_root: str, imagenet_root: Optional[str]=None, arch: str = None):
     ds = dataset.lower()
-    tf_tr = build_transforms(ds, train=True)
-    tf_te = build_transforms(ds, train=False)
+    tf_tr = build_transforms(ds, train=True, arch=arch)
+    tf_te = build_transforms(ds, train=False, arch=arch)
 
     if ds == "cifar10":
         tr = datasets.CIFAR10(data_root, train=True,  transform=tf_tr, download=True)
@@ -72,9 +72,10 @@ def get_dataloaders(
     num_workers: int,
     dist_mode: bool,
     imagenet_root: Optional[str]=None,
-    seed: int = 42
+    seed: int = 42,
+    arch: str = None,
 ):
-    tr_set, te_set, nc = get_datasets(dataset, data_root, imagenet_root)
+    tr_set, te_set, nc = get_datasets(dataset, data_root, imagenet_root, arch=arch)
     sampler = DistributedSampler(tr_set, shuffle=True, seed=seed) if dist_mode else None
     tr_loader = DataLoader(
         tr_set,
@@ -104,23 +105,30 @@ def cifar_mean_std(dataset: str):
         
         return [0.4914,0.4822,0.4465],[0.2470,0.2435,0.2616]
 
-def build_transforms(dataset: str, train: bool):
+def build_transforms(dataset: str, train: bool, arch: str = None):
     ds = dataset.lower()
-    # ImageNet-style (224)
+    # ImageNet-style (224, or 299 for xception)
     if ds == "imagenet":
+        # Xception (loaded via timm) expects 299x299 input and Inception-style
+        # [-1,1] normalization, not the standard 224x224 / ImageNet-stats used
+        # by every other (torchvision-native) arch in this pipeline.
+        if arch is not None and arch.lower() == "xception":
+            mean, std, crop, resize = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], 299, 333
+        else:
+            mean, std, crop, resize = IMNET_MEAN, IMNET_STD, 224, 256
         if train:
             return transforms.Compose([
-                transforms.RandomResizedCrop(224),
+                transforms.RandomResizedCrop(crop),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize(IMNET_MEAN, IMNET_STD),
+                transforms.Normalize(mean, std),
             ])
         else:
             return transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
+                transforms.Resize(resize),
+                transforms.CenterCrop(crop),
                 transforms.ToTensor(),
-                transforms.Normalize(IMNET_MEAN, IMNET_STD),
+                transforms.Normalize(mean, std),
             ])
 
     # CIFAR10/100 (32x32 native)
@@ -170,6 +178,9 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
         "efficientnet_b4": getattr(models, "EfficientNet_B4_Weights", None).IMAGENET1K_V1 if hasattr(models, "EfficientNet_B4_Weights") else None,
         "convnext_base":   getattr(models, "ConvNeXt_Base_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Base_Weights") else None,
         "convnext_large":  getattr(models, "ConvNeXt_Large_Weights",  None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Large_Weights") else None,
+        "convnext_tiny":   getattr(models, "ConvNeXt_Tiny_Weights",   None).IMAGENET1K_V1 if hasattr(models, "ConvNeXt_Tiny_Weights") else None,
+        "densenet121":     getattr(models, "DenseNet121_Weights",     None).IMAGENET1K_V1 if hasattr(models, "DenseNet121_Weights") else None,
+        "squeezenet1_1":   getattr(models, "SqueezeNet1_1_Weights",   None).IMAGENET1K_V1 if hasattr(models, "SqueezeNet1_1_Weights") else None,
         # "mlp" doesn't have pretrained
     }
 
@@ -188,6 +199,15 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
 
     if a == "mlp":
         return CIFARMLP(num_classes)
+
+    # Xception is not in torchvision; load via timm (auto-installed if missing).
+    if a == "xception":
+        try:
+            import timm
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "timm"])
+            import timm
+        return timm.create_model("xception", pretrained=bool(use_pretrained), num_classes=num_classes)
 
     # pick constructor
     ctor = getattr(models, a, None)
@@ -213,9 +233,27 @@ def build_model(arch: str, num_classes: int, use_pretrained: bool) -> nn.Module:
                 in_f = last.in_features
                 new_seq = list(m.classifier[:-1]) + [nn.Linear(in_f, num_classes)]
                 m.classifier = nn.Sequential(*new_seq)
+            else:
+                # SqueezeNet: classifier is Sequential(Dropout, Conv2d, ReLU,
+                # AdaptiveAvgPool2d) -- the Conv2d head isn't the last element.
+                for i, layer in enumerate(m.classifier):
+                    if isinstance(layer, nn.Conv2d) and layer.out_channels != num_classes:
+                        m.classifier[i] = nn.Conv2d(
+                            layer.in_channels, num_classes,
+                            kernel_size=layer.kernel_size,
+                            stride=layer.stride,
+                        )
+                        break
         elif isinstance(m.classifier, nn.Linear):
             if m.classifier.out_features != num_classes:
                 m.classifier = nn.Linear(m.classifier.in_features, num_classes)
+        elif isinstance(m.classifier, nn.Conv2d):
+            if m.classifier.out_channels != num_classes:
+                m.classifier = nn.Conv2d(
+                    m.classifier.in_channels, num_classes,
+                    kernel_size=m.classifier.kernel_size,
+                    stride=m.classifier.stride,
+                )
 
     return m
 

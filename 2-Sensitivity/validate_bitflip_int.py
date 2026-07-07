@@ -287,10 +287,10 @@ def run_experiment_one(arch: str, fmt: str, args):
     print(f"  [read] {csv_path}  ({len(rows)} candidate weights)")
 
     _, _, nc = TQ.get_datasets(args.dataset, args.data_root,
-                                args.imagenet_root or None)
+                                args.imagenet_root or None, arch=arch)
     _, test_loader, _, _ = TQ.get_dataloaders(
         args.dataset, args.data_root, args.batch_size, args.workers,
-        dist_mode=False, imagenet_root=args.imagenet_root or None)
+        dist_mode=False, imagenet_root=args.imagenet_root or None, arch=arch)
 
     model = TQ.build_model(arch, nc, use_pretrained=bool(args.use_pretrained)).to(device)
     if args.weights:

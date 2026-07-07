@@ -35,11 +35,18 @@ DATASETS="${DATASETS:-IMAGENET}"
 
 # ---- Architectures (space-separated, must match torchvision/model names exactly) ----
 # Valid values: resnet18  resnet50  mobilenet_v2  efficientnet_b0  vgg16
-ARCHS="${ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
+#               convnext_tiny  densenet121  squeezenet1_1  xception
+# ARCHS="${ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0 convnext_tiny densenet121 squeezenet1_1 xception}"
+# ARCHS="${ARCHS:-convnext_tiny densenet121 squeezenet1_1 xception}"
+ARCHS="${ARCHS:-xception}"
 
 # ---- Default runtime parameters ----
 BATCH_SIZE="${BATCH_SIZE:-128}"
 DEVICE="${DEVICE:-cuda}"
+# Dataloader worker processes. qat_train.py/test-Quantizer.py default to 2 if
+# not passed explicitly, which starves the GPU when --cpus-per-task is higher
+# (SLURM scripts request 16). Match that allocation here.
+WORKERS="${WORKERS:-16}"
 # QUANTIZE_BITS="${QUANTIZE_BITS:-8 4}"
 QUANTIZE_BITS="${QUANTIZE_BITS:-6 8}"
 # QUANT_LEVELS — full sweep used in 2-Sensitivity and 3-PatternFinder loops.
@@ -71,9 +78,21 @@ SKIP_TRAIN="${SKIP_TRAIN:-false}"
 
 QAT_ENABLED="${QAT_ENABLED:-true}" # set to true to enable Quantization-Aware Training (QAT) instead of Post-Training Quantization (PTQ)
 
-QAT_EPOCHS="${QAT_EPOCHS:-30}"           # QAT fine-tuning epochs (much less than full training)
+QAT_EPOCHS="${QAT_EPOCHS:-30}"            # QAT fine-tuning epochs (much less than full training)
 QAT_LR="${QAT_LR:-1e-3}"                # smaller LR for QAT fine-tuning
 QAT_SKIP_FIRST_LAST="${QAT_SKIP_FIRST_LAST:-0}"  # 1 = leave first Conv2d + last Linear at float32 (helps INT4 robustness)
+
+# ---- Per-arch overrides for QAT batch size / skip-first-last ----
+# Falls back to BATCH_SIZE / QAT_SKIP_FIRST_LAST above for any arch not listed here.
+# Values below match what Ref/More/run_all_27_qat_fair.sh validated for these archs.
+# Override a single arch's value at submit time, e.g.: ARCH_BATCH_SIZE_xception=32 sbatch ...
+declare -A ARCH_BATCH_SIZE=(
+    [convnext_tiny]="${ARCH_BATCH_SIZE_convnext_tiny:-64}"
+    [xception]="${ARCH_BATCH_SIZE_xception:-64}"
+)
+declare -A ARCH_SKIP_FIRST_LAST=(
+    [xception]="${ARCH_SKIP_FIRST_LAST_xception:-1}"
+)
 
 # ---- Disable pattern search (identity permutation only) ----
 # Set DISABLE_PATTERN_FIND=true to skip the interleaver search and save weights
@@ -98,9 +117,8 @@ SENS_NORM_MIN="${SENS_NORM_MIN:-0.5}"  # floor of Taylor-score normalization ran
 # Modify these to subset the combinations you actually want to embed.
 # EMBED_DATASETS="${EMBED_DATASETS:-CIFAR10 CIFAR100 IMAGENET}"
 EMBED_DATASETS="${EMBED_DATASETS:-IMAGENET}"
-# EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0}"
-EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50}"
-# EMBED_ARCHS="${EMBED_ARCHS:-mobilenet_v2 efficientnet_b0}"
+# EMBED_ARCHS="${EMBED_ARCHS:-resnet18 resnet50 mobilenet_v2 efficientnet_b0 convnext_tiny densenet121 squeezenet1_1 xception}"
+EMBED_ARCHS="${EMBED_ARCHS:-xception}"
 # EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-8 4}"   # quantized levels only (not float32)
 EMBED_QUANT_BITS="${EMBED_QUANT_BITS:-6 8}"   # quantized levels only (not float32)
 EMBED_APPROACH="${EMBED_APPROACH:-search3}" # 'parfit', 'replace', 'no', 'parfix', 'search3', 'greedy'
@@ -128,7 +146,7 @@ _ensure_dirs
 
 export SIF PROJECT_ROOT DATA_ROOT DATASET_DIR ARTIFACTS_DIR \
        MODELS_DIR SENSITIVITY_DIR PATTERNS_DIR IMAGENET_ROOT \
-       DATASETS ARCHS BATCH_SIZE DEVICE QUANTIZE_BITS QUANT_LEVELS \
+       DATASETS ARCHS BATCH_SIZE DEVICE WORKERS QUANTIZE_BITS QUANT_LEVELS \
        TOP_LAYERS TOP_PER_LAYER LAYER_METRIC MAX_BATCHES \
        GROUP_SIZE MAX_SENS TOP_SENSITIVE SENS_THRESHOLD MAX_STRIDE SKIP_TRAIN \
        QAT_ENABLED QAT_EPOCHS QAT_LR QAT_SKIP_FIRST_LAST \

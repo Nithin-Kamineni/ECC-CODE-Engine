@@ -33,7 +33,7 @@
 #SBATCH --partition=hpg-turin
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:l4:1
 #SBATCH --mem=32gb
 #SBATCH --time=48:00:00
@@ -124,6 +124,7 @@ for DS in $DATASETS; do
                 --out-dir    "${SENS_OUT}" \
                 --methods magnitude grad_abs taylor fisher \
                 --max-batches "${MAX_B}" \
+                --workers     "${WORKERS}" \
                 ${QBITS_FLAG} ${WEIGHTS_FLAG} \
                 ${PRETRAINED_FLAG} ${IMGNET_FLAG}
 
@@ -141,6 +142,7 @@ for DS in $DATASETS; do
                 --top-per-layer "${TOP_PER_LAYER}" \
                 --layer-metric  "${LAYER_METRIC}" \
                 --max-batches   "${MAX_B}" \
+                --workers       "${WORKERS}" \
                 ${QBITS_FLAG} ${WEIGHTS_FLAG} \
                 ${PRETRAINED_FLAG} ${IMGNET_FLAG}
 

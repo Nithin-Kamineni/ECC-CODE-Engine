@@ -100,7 +100,8 @@ def main():
         description="Evaluate ECC-embedded model accuracy with sensitive-layer protection")
     ap.add_argument("--dataset",         required=True, choices=["CIFAR10", "CIFAR100", "IMAGENET"])
     ap.add_argument("--arch",            required=True,
-                    choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0"])
+                    choices=["resnet18", "resnet50", "mobilenet_v2", "efficientnet_b0",
+                             "convnext_tiny", "densenet121", "squeezenet1_1", "xception"])
     ap.add_argument("--quant-bits",      required=True, type=int, choices=[4, 6, 8, 16])
     ap.add_argument("--t-value",         required=True, type=int)
     ap.add_argument("--approach",        required=True)
@@ -212,6 +213,7 @@ def main():
         num_workers=args.workers,
         dist_mode=False,
         imagenet_root=args.imagenet_root,
+        arch=args.arch,
     )
 
     model = build_model(args.arch, nc, use_pretrained=False).to(device)

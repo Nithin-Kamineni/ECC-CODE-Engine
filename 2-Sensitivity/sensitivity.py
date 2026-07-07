@@ -645,7 +645,7 @@ def main():
     print(f"[Device] {device}")
 
     _, _, nc = TQ.get_datasets(args.dataset, args.data_root,
-                               args.imagenet_root or None)
+                               args.imagenet_root or None, arch=args.arch)
 
     def fresh_model():
         m = TQ.build_model(args.arch, nc,
@@ -666,7 +666,7 @@ def main():
 
     _, test_loader, _, _ = TQ.get_dataloaders(
         args.dataset, args.data_root, args.batch_size, args.workers,
-        dist_mode=False, imagenet_root=args.imagenet_root or None)
+        dist_mode=False, imagenet_root=args.imagenet_root or None, arch=args.arch)
 
     # ---- decide dump mode ----
     if args.dump_weights:
